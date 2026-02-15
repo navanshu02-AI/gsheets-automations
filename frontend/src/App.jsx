@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 const createJoinKey = () => ({ base_column: '', source_column: '' })
 const createConcatPart = () => ({ sheet: '', column: '', join_keys: [] })
@@ -48,8 +48,20 @@ const getSourceSheetFromTransformed = (sheetName) => {
   return sheetName.split('__transformed')[0]
 }
 
+const chunkRows = (rows, chunkSize) => {
+  if (!Number.isFinite(chunkSize) || chunkSize <= 0) {
+    return [rows]
+  }
+  const chunks = []
+  for (let index = 0; index < rows.length; index += chunkSize) {
+    chunks.push(rows.slice(index, index + chunkSize))
+  }
+  return chunks
+}
+
 export function App() {
   const [selectedFile, setSelectedFile] = useState(null)
+  const [featureTab, setFeatureTab] = useState('transform')
   const [transformTab, setTransformTab] = useState('concat')
   const [uploadLoading, setUploadLoading] = useState(false)
   const [concatLoading, setConcatLoading] = useState(false)
@@ -65,10 +77,44 @@ export function App() {
     concat_operations: [],
     vlookup_operations: [],
   })
+  const [deliverySheet, setDeliverySheet] = useState('')
+  const [deliveryColumns, setDeliveryColumns] = useState([])
+  const [deliveryRowsPerPage, setDeliveryRowsPerPage] = useState(10)
 
   const sheetNames = useMemo(() => Object.keys(sheetResults), [sheetResults])
   const hasUploadResults = useMemo(() => sheetNames.length > 0, [sheetNames])
   const activeSheetResult = activeSheet ? sheetResults[activeSheet] : undefined
+  const deliverySheetResult = deliverySheet ? sheetResults[deliverySheet] : undefined
+  const deliveryAvailableColumns = deliverySheetResult?.columns ?? []
+  const selectedDeliveryColumns =
+    deliveryColumns.length > 0 ? deliveryColumns : deliveryAvailableColumns.slice(0, 4)
+  const deliveryRows = deliverySheetResult?.rows ?? []
+  const deliveryPages = useMemo(
+    () => chunkRows(deliveryRows, deliveryRowsPerPage),
+    [deliveryRows, deliveryRowsPerPage]
+  )
+
+  useEffect(() => {
+    if (sheetNames.length === 0) {
+      setDeliverySheet('')
+      setDeliveryColumns([])
+      return
+    }
+    if (!deliverySheet || !sheetNames.includes(deliverySheet)) {
+      setDeliverySheet(sheetNames[0])
+    }
+  }, [sheetNames, deliverySheet])
+
+  useEffect(() => {
+    if (deliveryAvailableColumns.length === 0) {
+      setDeliveryColumns([])
+      return
+    }
+    setDeliveryColumns((current) => {
+      const filtered = current.filter((column) => deliveryAvailableColumns.includes(column))
+      return filtered.length > 0 ? filtered : deliveryAvailableColumns.slice(0, 4)
+    })
+  }, [deliveryAvailableColumns])
 
   const columnsBySheet = useMemo(() => {
     const mapping = {}
@@ -477,6 +523,15 @@ export function App() {
     })
   }
 
+  const toggleDeliveryColumn = (columnName) => {
+    setDeliveryColumns((current) => {
+      if (current.includes(columnName)) {
+        return current.filter((column) => column !== columnName)
+      }
+      return [...current, columnName]
+    })
+  }
+
   const renderTable = (tableColumns, tableRows) => (
     <div className="table-wrapper">
       <table>
@@ -524,7 +579,26 @@ export function App() {
           </button>
         ) : null}
 
-        <section className="builder-section">
+        <div className="feature-tabs">
+          <button
+            type="button"
+            className={`transform-tab ${featureTab === 'transform' ? 'active' : ''}`}
+            onClick={() => setFeatureTab('transform')}
+          >
+            Transform Builder
+          </button>
+          <button
+            type="button"
+            className={`transform-tab ${featureTab === 'delivery' ? 'active' : ''}`}
+            onClick={() => setFeatureTab('delivery')}
+          >
+            Delivery Sheet Print (4x6)
+          </button>
+        </div>
+
+        {featureTab === 'transform' ? (
+          <>
+            <section className="builder-section">
           <h3>Advanced Transform Builder</h3>
           <p className="hint">
             Configure concat and VLOOKUP pipeline. Run Upload first to load sheet and column
@@ -1083,44 +1157,124 @@ export function App() {
               </button>
             </div>
           )}
-        </section>
+            </section>
 
-        {builderErrors.length > 0 ? (
-          <div className="error-box">
-            {builderErrors.map((message) => (
-              <p key={message} className="error-item">
-                {message}
-              </p>
-            ))}
-          </div>
-        ) : null}
+            {builderErrors.length > 0 ? (
+              <div className="error-box">
+                {builderErrors.map((message) => (
+                  <p key={message} className="error-item">
+                    {message}
+                  </p>
+                ))}
+              </div>
+            ) : null}
 
-        {uploadError ? <p className="error">{uploadError}</p> : null}
-        {transformsApplied ? <p className="success">Transforms applied successfully.</p> : null}
+            {uploadError ? <p className="error">{uploadError}</p> : null}
+            {transformsApplied ? <p className="success">Transforms applied successfully.</p> : null}
 
-        {hasUploadResults ? (
-          <section>
-            <h3>Upload Output Preview</h3>
-            <div className="sheet-tabs">
-              {sheetNames.map((sheetName) => (
+            {hasUploadResults ? (
+              <section>
+                <h3>Upload Output Preview</h3>
+                <div className="sheet-tabs">
+                  {sheetNames.map((sheetName) => (
+                    <button
+                      key={sheetName}
+                      className={`sheet-tab ${sheetName === activeSheet ? 'active' : ''}`}
+                      onClick={() => setActiveSheet(sheetName)}
+                      type="button"
+                    >
+                      {sheetName}
+                      {resultSheets.includes(sheetName) ? <span className="badge">transformed</span> : null}
+                    </button>
+                  ))}
+                </div>
+                {activeSheetResult ? (
+                  renderTable(activeSheetResult.columns ?? [], activeSheetResult.rows ?? [])
+                ) : (
+                  <p>No sheet preview available.</p>
+                )}
+              </section>
+            ) : null}
+          </>
+        ) : (
+          <section className="builder-section">
+            <h3>Delivery Sheet Print</h3>
+            <p className="hint">
+              Print order data as a 4x6 inch table. Select a sheet and columns, then print.
+            </p>
+
+            {hasUploadResults ? (
+              <>
+                <div className="op-grid">
+                  <label>
+                    Order Sheet
+                    <select
+                      value={deliverySheet}
+                      onChange={(event) => setDeliverySheet(event.target.value)}
+                    >
+                      <option value="">Select sheet</option>
+                      {sheetNames.map((sheetName) => (
+                        <option key={`delivery-sheet-${sheetName}`} value={sheetName}>
+                          {sheetName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Rows Per 4x6 Page
+                    <input
+                      type="number"
+                      min="4"
+                      max="24"
+                      value={deliveryRowsPerPage}
+                      onChange={(event) => {
+                        const nextValue = Number.parseInt(event.target.value, 10)
+                        setDeliveryRowsPerPage(Number.isNaN(nextValue) ? 10 : nextValue)
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <div className="column-pills">
+                  {deliveryAvailableColumns.map((column) => (
+                    <label key={`delivery-column-${column}`} className="toggle-pill">
+                      <input
+                        type="checkbox"
+                        checked={selectedDeliveryColumns.includes(column)}
+                        onChange={() => toggleDeliveryColumn(column)}
+                      />
+                      {column}
+                    </label>
+                  ))}
+                </div>
+
                 <button
-                  key={sheetName}
-                  className={`sheet-tab ${sheetName === activeSheet ? 'active' : ''}`}
-                  onClick={() => setActiveSheet(sheetName)}
                   type="button"
+                  onClick={() => window.print()}
+                  disabled={selectedDeliveryColumns.length === 0 || deliveryRows.length === 0}
                 >
-                  {sheetName}
-                  {resultSheets.includes(sheetName) ? <span className="badge">transformed</span> : null}
+                  Print 4x6 Delivery Sheets
                 </button>
-              ))}
-            </div>
-            {activeSheetResult ? (
-              renderTable(activeSheetResult.columns ?? [], activeSheetResult.rows ?? [])
+
+                <section className="delivery-print-preview" aria-label="Delivery print preview">
+                  {deliveryPages.map((pageRows, pageIndex) => (
+                    <article key={`delivery-page-${pageIndex}`} className="delivery-page">
+                      <header className="delivery-header">
+                        <h4>Delivery Sheet</h4>
+                        <p>
+                          {deliverySheet} - Page {pageIndex + 1} of {deliveryPages.length}
+                        </p>
+                      </header>
+                      {renderTable(selectedDeliveryColumns, pageRows)}
+                    </article>
+                  ))}
+                </section>
+              </>
             ) : (
-              <p>No sheet preview available.</p>
+              <p className="hint">Run upload first to load order sheets and rows for printing.</p>
             )}
           </section>
-        ) : null}
+        )}
       </section>
     </main>
   )

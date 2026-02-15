@@ -105,6 +105,12 @@ select {
   gap: 0.5rem;
 }
 
+.feature-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .transform-tab {
   background: #e2e8f0;
   color: #0f172a;
@@ -239,4 +245,120 @@ td {
 .success {
   color: #166534;
   font-weight: 600;
+}
+
+.column-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.toggle-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.86rem;
+  background: #f8fafc;
+}
+
+.delivery-print-preview {
+  display: grid;
+  gap: 1rem;
+}
+
+.delivery-page {
+  width: 4in;
+  min-height: 6in;
+  box-sizing: border-box;
+  border: 1px solid #94a3b8;
+  border-radius: 6px;
+  padding: 0.18in;
+  background: #ffffff;
+  break-after: page;
+}
+
+.delivery-page .table-wrapper {
+  border: 1px solid #dbe4f0;
+}
+
+.delivery-page table {
+  table-layout: fixed;
+  font-size: 0.62rem;
+}
+
+.delivery-page th,
+.delivery-page td {
+  padding: 0.07in 0.05in;
+  word-break: break-word;
+}
+
+.delivery-header {
+  margin-bottom: 0.15in;
+}
+
+.delivery-header h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.delivery-header p {
+  margin: 0.05rem 0 0;
+  font-size: 0.72rem;
+  color: #334155;
+}
+
+@media print {
+  @page {
+    size: 4in 6in;
+    margin: 0.2in;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  .page > h1,
+  .page > p,
+  .panel > h2,
+  .panel > label,
+  .panel > input,
+  .panel > .file-meta,
+  .panel > button,
+  .feature-tabs,
+  .builder-section > h3,
+  .builder-section > p,
+  .builder-section > .op-grid,
+  .builder-section > .column-pills,
+  .builder-section > button {
+    display: none !important;
+  }
+
+  .page {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .panel {
+    border: none;
+    padding: 0;
+    background: transparent;
+  }
+
+  .delivery-print-preview {
+    display: block;
+  }
+
+  .delivery-page {
+    border: none;
+    border-radius: 0;
+    margin: 0;
+    padding: 0;
+    min-height: auto;
+    width: auto;
+    break-after: page;
+  }
 }
