@@ -5,7 +5,7 @@ Simple starter project for **Python + React** spreadsheet workflows focused on g
 ## What is included
 
 - **Backend**: FastAPI service that accepts CSV text, normalizes headers, and runs starter automation rules.
-- **Frontend**: React app where you can paste CSV text or upload CSV/Excel files and preview automated output.
+- **Frontend**: React app where you can upload CSV/Excel files and preview automated output.
 
 ## Backend (Python)
 
@@ -87,8 +87,74 @@ Upload response shape:
       "columns": ["product", "quantity", "unit_price", "line_total", "is_gusset"],
       "rows": [{ "product": "Gusset Bag Small", "quantity": 4 }]
     }
-  }
+  },
+  "transforms_applied": false,
+  "result_sheets": []
 }
+```
+
+## Advanced upload transforms
+
+`POST /api/automate/upload` accepts an optional multipart `config` field (JSON string).
+If provided, the backend runs:
+
+1. All `concat_operations` in order
+2. All `vlookup_operations` in order
+
+Transformed data is returned as a new sheet (`<base_sheet>__transformed`, collision-safe suffixes),
+while original sheets remain unchanged.
+
+Example `config`:
+
+```json
+{
+  "base_sheet": "orders",
+  "concat_operations": [
+    {
+      "output_column": "full_name",
+      "delimiter": " ",
+      "parts": [
+        { "sheet": "orders", "column": "first_name", "join_keys": [] },
+        {
+          "sheet": "customers",
+          "column": "last_name",
+          "join_keys": [{ "base_column": "customer_id", "source_column": "customer_id" }]
+        }
+      ]
+    }
+  ],
+  "vlookup_operations": [
+    {
+      "lookup_mode": "exact",
+      "base_key_columns": ["sku"],
+      "lookup_sheet": "catalog",
+      "lookup_key_columns": ["sku"],
+      "return_columns": ["category", "brand"],
+      "output_prefix": "catalog_"
+    },
+    {
+      "lookup_mode": "nearest",
+      "base_key_columns": ["price"],
+      "lookup_sheet": "pricebands",
+      "lookup_key_columns": ["threshold"],
+      "return_columns": ["band_name"],
+      "output_prefix": "band_"
+    }
+  ]
+}
+```
+
+`vlookup` behavior:
+
+- `exact`: first matching lookup row is used.
+- `nearest`: minimum absolute numeric distance (single key only).
+
+Multipart upload with config:
+
+```bash
+curl -X POST http://localhost:8000/api/automate/upload \
+  -F "file=@/absolute/path/to/spreadsheet.xlsx" \
+  -F 'config={"base_sheet":"orders","concat_operations":[],"vlookup_operations":[{"lookup_mode":"exact","base_key_columns":["sku"],"lookup_sheet":"catalog","lookup_key_columns":["sku"],"return_columns":["category"],"output_prefix":"catalog_"}]}'
 ```
 
 This gives you a clean base for additional Excel/CSV/Google Sheets automation logic.

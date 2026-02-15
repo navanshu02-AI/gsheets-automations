@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from .automations import (
+    TransformConfig,
+    apply_transform_pipeline,
     parse_csv_bytes,
     parse_excel_bytes,
     run_automation_on_sheets,
@@ -68,8 +71,28 @@ def _serialize_sheet_results(sheets: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _parse_transform_config(config: str | None) -> TransformConfig | None:
+    if config is None:
+        return None
+
+    if not config.strip():
+        return None
+
+    try:
+        payload = json.loads(config)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid config JSON: {exc.msg}") from exc
+
+    try:
+        return TransformConfig.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid transform config: {exc}") from exc
+
+
 @app.post("/api/automate/upload")
-async def automate_upload(file: UploadFile = File(...)) -> dict[str, object]:
+async def automate_upload(
+    file: UploadFile = File(...), config: str | None = Form(default=None)
+) -> dict[str, object]:
     filename = file.filename or ""
     extension = Path(filename).suffix.lower()
     content_type = (file.content_type or "").lower()
@@ -98,23 +121,47 @@ async def automate_upload(file: UploadFile = File(...)) -> dict[str, object]:
         not extension and content_type in EXCEL_CONTENT_TYPES
     )
 
+    parsed_config = _parse_transform_config(config)
+
     try:
         if is_csv:
-            automated_sheets = run_automation_on_sheets(
-                {"data": parse_csv_bytes(file_bytes)}
-            )
+            automated_sheets = run_automation_on_sheets({"data": parse_csv_bytes(file_bytes)})
+            result_sheets: list[str] = []
+            output_sheets = automated_sheets
+
+            if parsed_config is not None:
+                output_sheets, result_sheets = apply_transform_pipeline(
+                    automated_sheets, parsed_config
+                )
+
             return {
                 "source_type": "csv",
-                "sheets": _serialize_sheet_results(automated_sheets),
+                "sheets": _serialize_sheet_results(output_sheets),
+                "transforms_applied": bool(result_sheets),
+                "result_sheets": result_sheets,
             }
 
         if is_excel:
             parsed_sheets = parse_excel_bytes(file_bytes)
             automated_sheets = run_automation_on_sheets(parsed_sheets)
+            result_sheets = []
+            output_sheets = automated_sheets
+
+            if parsed_config is not None:
+                output_sheets, result_sheets = apply_transform_pipeline(
+                    automated_sheets, parsed_config
+                )
+
             return {
                 "source_type": "excel",
-                "sheets": _serialize_sheet_results(automated_sheets),
+                "sheets": _serialize_sheet_results(output_sheets),
+                "transforms_applied": bool(result_sheets),
+                "result_sheets": result_sheets,
             }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - lightweight starter app
         raise HTTPException(
             status_code=400, detail=f"Unable to process uploaded file: {exc}"
