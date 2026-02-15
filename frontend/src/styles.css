@@ -58,6 +58,7 @@ button[disabled] {
 
 input[type='file'],
 input[type='text'],
+input[type='number'],
 select {
   font-size: 0.95rem;
   border: 1px solid #cbd5e1;
@@ -310,6 +311,41 @@ td {
   color: #334155;
 }
 
+.column-config-list {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.column-config-card {
+  border: 1px solid #dbe4f0;
+  background: #f8fbff;
+  border-radius: 10px;
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.column-config-title {
+  margin: 0;
+  font-size: 0.86rem;
+  color: #334155;
+  font-weight: 700;
+}
+
+.column-config-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.delivery-table.no-borders th,
+.delivery-table.no-borders td {
+  border: none;
+}
+
 @media print {
   @page {
     size: 4in 6in;
@@ -332,6 +368,7 @@ td {
   .builder-section > p,
   .builder-section > .op-grid,
   .builder-section > .column-pills,
+  .builder-section > .column-config-list,
   .builder-section > button {
     display: none !important;
   }

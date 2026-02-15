@@ -80,14 +80,21 @@ export function App() {
   const [deliverySheet, setDeliverySheet] = useState('')
   const [deliveryColumns, setDeliveryColumns] = useState([])
   const [deliveryRowsPerPage, setDeliveryRowsPerPage] = useState(10)
+  const [deliveryTableOptions, setDeliveryTableOptions] = useState({
+    showHeader: true,
+    bordered: true,
+    textAlign: 'left',
+    fontSize: 10,
+    cellPadding: 6,
+  })
+  const [deliveryColumnSettings, setDeliveryColumnSettings] = useState({})
 
   const sheetNames = useMemo(() => Object.keys(sheetResults), [sheetResults])
   const hasUploadResults = useMemo(() => sheetNames.length > 0, [sheetNames])
   const activeSheetResult = activeSheet ? sheetResults[activeSheet] : undefined
   const deliverySheetResult = deliverySheet ? sheetResults[deliverySheet] : undefined
   const deliveryAvailableColumns = deliverySheetResult?.columns ?? []
-  const selectedDeliveryColumns =
-    deliveryColumns.length > 0 ? deliveryColumns : deliveryAvailableColumns.slice(0, 4)
+  const selectedDeliveryColumns = deliveryColumns
   const deliveryRows = deliverySheetResult?.rows ?? []
   const deliveryPages = useMemo(
     () => chunkRows(deliveryRows, deliveryRowsPerPage),
@@ -108,11 +115,23 @@ export function App() {
   useEffect(() => {
     if (deliveryAvailableColumns.length === 0) {
       setDeliveryColumns([])
+      setDeliveryColumnSettings({})
       return
     }
     setDeliveryColumns((current) => {
       const filtered = current.filter((column) => deliveryAvailableColumns.includes(column))
       return filtered.length > 0 ? filtered : deliveryAvailableColumns.slice(0, 4)
+    })
+    setDeliveryColumnSettings((current) => {
+      const next = {}
+      deliveryAvailableColumns.forEach((column) => {
+        const existing = current[column] ?? {}
+        next[column] = {
+          label: existing.label ?? column,
+          width: Number.isFinite(existing.width) ? existing.width : 25,
+        }
+      })
+      return next
     })
   }, [deliveryAvailableColumns])
 
@@ -532,6 +551,31 @@ export function App() {
     })
   }
 
+  const setDeliveryColumnSetting = (columnName, updater) => {
+    setDeliveryColumnSettings((current) => ({
+      ...current,
+      [columnName]: updater(current[columnName] ?? { label: columnName, width: 25 }),
+    }))
+  }
+
+  const moveDeliveryColumn = (columnName, direction) => {
+    setDeliveryColumns((current) => {
+      const index = current.indexOf(columnName)
+      if (index === -1) {
+        return current
+      }
+      const nextIndex = direction === 'left' ? index - 1 : index + 1
+      if (nextIndex < 0 || nextIndex >= current.length) {
+        return current
+      }
+      const next = [...current]
+      const item = next[index]
+      next[index] = next[nextIndex]
+      next[nextIndex] = item
+      return next
+    })
+  }
+
   const renderTable = (tableColumns, tableRows) => (
     <div className="table-wrapper">
       <table>
@@ -547,6 +591,51 @@ export function App() {
             <tr key={`row-${rowIndex}`}>
               {tableColumns.map((column) => (
                 <td key={`${rowIndex}-${column}`}>{String(row[column] ?? '')}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+
+  const renderDeliveryTable = (tableColumns, tableRows) => (
+    <div className="table-wrapper delivery-table-wrapper">
+      <table
+        className={`delivery-table ${deliveryTableOptions.bordered ? '' : 'no-borders'}`.trim()}
+        style={{ fontSize: `${deliveryTableOptions.fontSize}px` }}
+      >
+        {deliveryTableOptions.showHeader ? (
+          <thead>
+            <tr>
+              {tableColumns.map((column) => (
+                <th
+                  key={column}
+                  style={{
+                    width: `${deliveryColumnSettings[column]?.width ?? 25}%`,
+                    textAlign: deliveryTableOptions.textAlign,
+                    padding: `${deliveryTableOptions.cellPadding}px`,
+                  }}
+                >
+                  {deliveryColumnSettings[column]?.label ?? column}
+                </th>
+              ))}
+            </tr>
+          </thead>
+        ) : null}
+        <tbody>
+          {tableRows.map((row, rowIndex) => (
+            <tr key={`delivery-row-${rowIndex}`}>
+              {tableColumns.map((column) => (
+                <td
+                  key={`${rowIndex}-${column}`}
+                  style={{
+                    textAlign: deliveryTableOptions.textAlign,
+                    padding: `${deliveryTableOptions.cellPadding}px`,
+                  }}
+                >
+                  {String(row[column] ?? '')}
+                </td>
               ))}
             </tr>
           ))}
@@ -1248,6 +1337,144 @@ export function App() {
                   ))}
                 </div>
 
+                {selectedDeliveryColumns.length > 0 ? (
+                  <>
+                    <div className="op-grid">
+                      <label>
+                        Header Row
+                        <select
+                          value={deliveryTableOptions.showHeader ? 'show' : 'hide'}
+                          onChange={(event) =>
+                            setDeliveryTableOptions((current) => ({
+                              ...current,
+                              showHeader: event.target.value === 'show',
+                            }))
+                          }
+                        >
+                          <option value="show">Show</option>
+                          <option value="hide">Hide</option>
+                        </select>
+                      </label>
+                      <label>
+                        Borders
+                        <select
+                          value={deliveryTableOptions.bordered ? 'on' : 'off'}
+                          onChange={(event) =>
+                            setDeliveryTableOptions((current) => ({
+                              ...current,
+                              bordered: event.target.value === 'on',
+                            }))
+                          }
+                        >
+                          <option value="on">On</option>
+                          <option value="off">Off</option>
+                        </select>
+                      </label>
+                      <label>
+                        Text Align
+                        <select
+                          value={deliveryTableOptions.textAlign}
+                          onChange={(event) =>
+                            setDeliveryTableOptions((current) => ({
+                              ...current,
+                              textAlign: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="left">Left</option>
+                          <option value="center">Center</option>
+                          <option value="right">Right</option>
+                        </select>
+                      </label>
+                      <label>
+                        Font Size (px)
+                        <input
+                          type="number"
+                          min="7"
+                          max="18"
+                          value={deliveryTableOptions.fontSize}
+                          onChange={(event) => {
+                            const nextValue = Number.parseInt(event.target.value, 10)
+                            setDeliveryTableOptions((current) => ({
+                              ...current,
+                              fontSize: Number.isNaN(nextValue) ? 10 : nextValue,
+                            }))
+                          }}
+                        />
+                      </label>
+                      <label>
+                        Cell Padding (px)
+                        <input
+                          type="number"
+                          min="2"
+                          max="16"
+                          value={deliveryTableOptions.cellPadding}
+                          onChange={(event) => {
+                            const nextValue = Number.parseInt(event.target.value, 10)
+                            setDeliveryTableOptions((current) => ({
+                              ...current,
+                              cellPadding: Number.isNaN(nextValue) ? 6 : nextValue,
+                            }))
+                          }}
+                        />
+                      </label>
+                    </div>
+
+                    <div className="column-config-list">
+                      {selectedDeliveryColumns.map((column, index) => (
+                        <article key={`column-config-${column}`} className="column-config-card">
+                          <p className="column-config-title">{column}</p>
+                          <label>
+                            Column Label
+                            <input
+                              type="text"
+                              value={deliveryColumnSettings[column]?.label ?? column}
+                              onChange={(event) =>
+                                setDeliveryColumnSetting(column, (current) => ({
+                                  ...current,
+                                  label: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label>
+                            Width (%)
+                            <input
+                              type="number"
+                              min="10"
+                              max="100"
+                              value={deliveryColumnSettings[column]?.width ?? 25}
+                              onChange={(event) => {
+                                const nextValue = Number.parseInt(event.target.value, 10)
+                                setDeliveryColumnSetting(column, (current) => ({
+                                  ...current,
+                                  width: Number.isNaN(nextValue) ? 25 : nextValue,
+                                }))
+                              }}
+                            />
+                          </label>
+                          <div className="inline-actions">
+                            <button
+                              type="button"
+                              onClick={() => moveDeliveryColumn(column, 'left')}
+                              disabled={index === 0}
+                            >
+                              Move Left
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => moveDeliveryColumn(column, 'right')}
+                              disabled={index === selectedDeliveryColumns.length - 1}
+                            >
+                              Move Right
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
+
                 <button
                   type="button"
                   onClick={() => window.print()}
@@ -1265,7 +1492,7 @@ export function App() {
                           {deliverySheet} - Page {pageIndex + 1} of {deliveryPages.length}
                         </p>
                       </header>
-                      {renderTable(selectedDeliveryColumns, pageRows)}
+                      {renderDeliveryTable(selectedDeliveryColumns, pageRows)}
                     </article>
                   ))}
                 </section>
