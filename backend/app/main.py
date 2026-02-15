@@ -162,6 +162,18 @@ async def automate_upload(
         raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ImportError as exc:
+        if "openpyxl" in str(exc).lower():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Missing dependency 'openpyxl'. Install backend dependencies with: "
+                    "pip install -r backend/requirements.txt"
+                ),
+            ) from exc
+        raise HTTPException(
+            status_code=400, detail=f"Unable to process uploaded file: {exc}"
+        ) from exc
     except Exception as exc:  # pragma: no cover - lightweight starter app
         raise HTTPException(
             status_code=400, detail=f"Unable to process uploaded file: {exc}"

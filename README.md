@@ -125,36 +125,43 @@ Example `config`:
   ],
   "vlookup_operations": [
     {
-      "lookup_mode": "exact",
-      "base_key_columns": ["sku"],
-      "lookup_sheet": "catalog",
-      "lookup_key_columns": ["sku"],
-      "return_columns": ["category", "brand"],
-      "output_prefix": "catalog_"
-    },
-    {
-      "lookup_mode": "nearest",
-      "base_key_columns": ["price"],
-      "lookup_sheet": "pricebands",
-      "lookup_key_columns": ["threshold"],
-      "return_columns": ["band_name"],
-      "output_prefix": "band_"
+      "lookup_value_column": "sku",
+      "table_array_sheet": "catalog",
+      "table_array_lookup_column": "sku",
+      "col_index_num": 2,
+      "range_lookup": false,
+      "output_column": "catalog_category"
     }
   ]
 }
 ```
 
-`vlookup` behavior:
+Excel mapping for selectable VLOOKUP UI:
 
-- `exact`: first matching lookup row is used.
-- `nearest`: minimum absolute numeric distance (single key only).
+`VLOOKUP(lookup_value, table_array, col_index_num, [range_lookup])`
+
+- `lookup_value` -> selected base-sheet lookup value column (per row)
+- `table_array` -> selected lookup sheet, starting from selected lookup column
+- `col_index_num` -> auto-computed from selected return column position (1-based)
+- `range_lookup` -> `FALSE` exact match, `TRUE` approximate match
+
+`range_lookup=TRUE` behavior:
+
+- Uses the largest lookup key less than or equal to `lookup_value`
+- Lookup column must be numeric and sorted ascending
+
+Legacy advanced mode:
+
+- Optional and backward compatible
+- Uses legacy fields (`lookup_mode`, `base_key_columns`, `lookup_key_columns`, `return_columns`)
+- `lookup_mode=nearest` is allowed only with `advanced_multi_key=true`
 
 Multipart upload with config:
 
 ```bash
 curl -X POST http://localhost:8000/api/automate/upload \
   -F "file=@/absolute/path/to/spreadsheet.xlsx" \
-  -F 'config={"base_sheet":"orders","concat_operations":[],"vlookup_operations":[{"lookup_mode":"exact","base_key_columns":["sku"],"lookup_sheet":"catalog","lookup_key_columns":["sku"],"return_columns":["category"],"output_prefix":"catalog_"}]}'
+  -F 'config={"base_sheet":"orders","concat_operations":[],"vlookup_operations":[{"lookup_value_column":"sku","table_array_sheet":"catalog","table_array_lookup_column":"sku","col_index_num":2,"range_lookup":false,"output_column":"catalog_category"}]}'
 ```
 
 This gives you a clean base for additional Excel/CSV/Google Sheets automation logic.

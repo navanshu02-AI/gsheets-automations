@@ -8,6 +8,13 @@ const createConcatOperation = () => ({
   parts: [createConcatPart(), createConcatPart()],
 })
 const createVlookupOperation = () => ({
+  lookup_value_column: '',
+  table_array_sheet: '',
+  table_array_lookup_column: '',
+  return_column: '',
+  range_lookup: false,
+  output_column: '',
+  advanced_multi_key: false,
   lookup_mode: 'exact',
   base_key_columns: '',
   lookup_sheet: '',
@@ -22,9 +29,31 @@ const parseCsvList = (value) =>
     .map((item) => item.trim())
     .filter(Boolean)
 
+const getColIndexNum = (tableColumns, lookupColumn, returnColumn) => {
+  if (!lookupColumn || !returnColumn) {
+    return null
+  }
+  const lookupIndex = tableColumns.indexOf(lookupColumn)
+  const returnIndex = tableColumns.indexOf(returnColumn)
+  if (lookupIndex === -1 || returnIndex === -1 || returnIndex < lookupIndex) {
+    return null
+  }
+  return returnIndex - lookupIndex + 1
+}
+
+const getSourceSheetFromTransformed = (sheetName) => {
+  if (!sheetName.includes('__transformed')) {
+    return sheetName
+  }
+  return sheetName.split('__transformed')[0]
+}
+
 export function App() {
   const [selectedFile, setSelectedFile] = useState(null)
+  const [transformTab, setTransformTab] = useState('concat')
   const [uploadLoading, setUploadLoading] = useState(false)
+  const [concatLoading, setConcatLoading] = useState(false)
+  const [vlookupLoading, setVlookupLoading] = useState(false)
   const [uploadError, setUploadError] = useState('')
   const [sheetResults, setSheetResults] = useState({})
   const [activeSheet, setActiveSheet] = useState('')
@@ -50,11 +79,59 @@ export function App() {
   }, [sheetResults])
 
   const baseSheetColumns = columnsBySheet[transformConfig.base_sheet] ?? []
+  const concatOutputColumns = useMemo(
+    () =>
+      transformConfig.concat_operations
+        .map((operation) => operation.output_column.trim())
+        .filter(Boolean),
+    [transformConfig.concat_operations]
+  )
+  const vlookupLookupValueColumns = useMemo(
+    () => [...new Set([...baseSheetColumns, ...concatOutputColumns])],
+    [baseSheetColumns, concatOutputColumns]
+  )
 
-  const buildTransformConfigPayload = () => {
-    const errors = []
+  const isAnyActionLoading = uploadLoading || concatLoading || vlookupLoading
 
-    const concatOps = transformConfig.concat_operations.map((operation, operationIndex) => {
+  const resolveSheetForRequest = (sheetName, errors, contextLabel) => {
+    if (!sheetName) {
+      return sheetName
+    }
+
+    if (sheetNames.includes(sheetName)) {
+      const sourceCandidate = getSourceSheetFromTransformed(sheetName)
+      if (sourceCandidate !== sheetName && !sheetNames.includes(sourceCandidate)) {
+        errors.push(
+          `${contextLabel}: transformed sheet '${sheetName}' requires source sheet '${sourceCandidate}' in uploaded file`
+        )
+      }
+      return sourceCandidate
+    }
+
+    return sheetName
+  }
+
+  const resolveSheetNameWithoutErrors = (sheetName) => {
+    if (!sheetName) {
+      return sheetName
+    }
+    if (sheetNames.includes(sheetName)) {
+      return getSourceSheetFromTransformed(sheetName)
+    }
+    return sheetName
+  }
+
+  const buildConcatOperations = (errors, allowedOutputColumns = null) => {
+    const indexedOperations = transformConfig.concat_operations
+      .map((operation, operationIndex) => ({ operation, operationIndex }))
+      .filter(({ operation }) => {
+        if (allowedOutputColumns === null) {
+          return true
+        }
+        return allowedOutputColumns.has(operation.output_column.trim())
+      })
+
+    return indexedOperations.map(({ operation, operationIndex }) => {
       if (!operation.output_column.trim()) {
         errors.push(`Concat operation ${operationIndex + 1}: output column is required`)
       }
@@ -83,7 +160,8 @@ export function App() {
           }
         })
 
-        const isCrossSheet = part.sheet && transformConfig.base_sheet && part.sheet !== transformConfig.base_sheet
+        const isCrossSheet =
+          part.sheet && transformConfig.base_sheet && part.sheet !== transformConfig.base_sheet
         if (isCrossSheet && joinKeys.length === 0) {
           errors.push(
             `Concat operation ${operationIndex + 1}, part ${partIndex + 1}: join keys are required for cross-sheet concat`
@@ -103,42 +181,146 @@ export function App() {
         parts,
       }
     })
+  }
 
-    const vlookupOps = transformConfig.vlookup_operations.map((operation, operationIndex) => {
-      const baseKeys = parseCsvList(operation.base_key_columns)
-      const lookupKeys = parseCsvList(operation.lookup_key_columns)
-      const returnColumns = parseCsvList(operation.return_columns)
+  const buildVlookupOperations = (errors) => {
+    return transformConfig.vlookup_operations.map((operation, operationIndex) => {
+      if (operation.advanced_multi_key) {
+        const baseKeys = parseCsvList(operation.base_key_columns)
+        const lookupKeys = parseCsvList(operation.lookup_key_columns)
+        const returnColumns = parseCsvList(operation.return_columns)
 
-      if (!operation.lookup_sheet) {
-        errors.push(`VLOOKUP operation ${operationIndex + 1}: lookup sheet is required`)
+        const resolvedLookupSheet = resolveSheetForRequest(
+          operation.lookup_sheet,
+          errors,
+          `VLOOKUP operation ${operationIndex + 1}`
+        )
+
+        if (!resolvedLookupSheet) {
+          errors.push(`VLOOKUP operation ${operationIndex + 1}: lookup sheet is required`)
+        }
+        if (baseKeys.length === 0) {
+          errors.push(`VLOOKUP operation ${operationIndex + 1}: base key columns are required`)
+        }
+        if (lookupKeys.length === 0) {
+          errors.push(`VLOOKUP operation ${operationIndex + 1}: lookup key columns are required`)
+        }
+        if (returnColumns.length === 0) {
+          errors.push(`VLOOKUP operation ${operationIndex + 1}: return columns are required`)
+        }
+
+        return {
+          advanced_multi_key: true,
+          lookup_mode: operation.lookup_mode,
+          base_key_columns: baseKeys,
+          lookup_sheet: resolvedLookupSheet,
+          lookup_key_columns: lookupKeys,
+          return_columns: returnColumns,
+          output_prefix: operation.output_prefix,
+        }
       }
-      if (baseKeys.length === 0) {
-        errors.push(`VLOOKUP operation ${operationIndex + 1}: base key columns are required`)
+
+      if (!operation.lookup_value_column) {
+        errors.push(`VLOOKUP operation ${operationIndex + 1}: lookup value column is required`)
       }
-      if (lookupKeys.length === 0) {
-        errors.push(`VLOOKUP operation ${operationIndex + 1}: lookup key columns are required`)
+      const resolvedTableArraySheet = resolveSheetForRequest(
+        operation.table_array_sheet,
+        errors,
+        `VLOOKUP operation ${operationIndex + 1}`
+      )
+
+      if (!resolvedTableArraySheet) {
+        errors.push(`VLOOKUP operation ${operationIndex + 1}: table array sheet is required`)
       }
-      if (returnColumns.length === 0) {
-        errors.push(`VLOOKUP operation ${operationIndex + 1}: return columns are required`)
+      if (!operation.table_array_lookup_column) {
+        errors.push(`VLOOKUP operation ${operationIndex + 1}: table array lookup column is required`)
+      }
+      if (!operation.return_column) {
+        errors.push(`VLOOKUP operation ${operationIndex + 1}: return column is required`)
+      }
+
+      const lookupColumns = columnsBySheet[resolvedTableArraySheet] ?? []
+      const colIndexNum = getColIndexNum(
+        lookupColumns,
+        operation.table_array_lookup_column,
+        operation.return_column
+      )
+      if (colIndexNum === null) {
+        const selectedSheet = operation.table_array_sheet || '(none)'
+        const requestSheet = resolvedTableArraySheet || '(none)'
+        errors.push(
+          `VLOOKUP operation ${operationIndex + 1}: return column must be in table_array and to the right of lookup column (selected sheet: ${selectedSheet}, request sheet: ${requestSheet})`
+        )
       }
 
       return {
-        lookup_mode: operation.lookup_mode,
-        base_key_columns: baseKeys,
-        lookup_sheet: operation.lookup_sheet,
-        lookup_key_columns: lookupKeys,
-        return_columns: returnColumns,
-        output_prefix: operation.output_prefix,
+        lookup_value_column: operation.lookup_value_column,
+        table_array_sheet: resolvedTableArraySheet,
+        table_array_lookup_column: operation.table_array_lookup_column,
+        col_index_num: colIndexNum ?? 0,
+        range_lookup: operation.range_lookup,
+        output_column: operation.output_column || operation.return_column,
       }
     })
+  }
 
-    const hasAdvancedOps = concatOps.length > 0 || vlookupOps.length > 0
+  const buildTransformConfigPayload = (mode) => {
+    const errors = []
+    const selectedVlookupOps = mode === 'vlookup' ? buildVlookupOperations(errors) : []
 
-    if (!hasAdvancedOps) {
-      return { payload: null, errors: [] }
+    let requiredConcatOutputs = null
+    if (mode === 'vlookup') {
+      const lookupOutputs = new Set(concatOutputColumns)
+      requiredConcatOutputs = new Set()
+
+      transformConfig.vlookup_operations.forEach((operation, operationIndex) => {
+        if (operation.advanced_multi_key) {
+          parseCsvList(operation.base_key_columns).forEach((column) => {
+            if (lookupOutputs.has(column)) {
+              requiredConcatOutputs.add(column)
+            }
+          })
+          return
+        }
+
+        const lookupValueColumn = operation.lookup_value_column.trim()
+        if (lookupOutputs.has(lookupValueColumn)) {
+          requiredConcatOutputs.add(lookupValueColumn)
+        }
+      })
+
+      requiredConcatOutputs.forEach((columnName) => {
+        const exists = transformConfig.concat_operations.some(
+          (operation) => operation.output_column.trim() === columnName
+        )
+        if (!exists) {
+          errors.push(
+            `VLOOKUP depends on concat output '${columnName}', but no matching concat operation is configured`
+          )
+        }
+      })
     }
 
-    if (!transformConfig.base_sheet) {
+    const selectedConcatOps =
+      mode === 'concat'
+        ? buildConcatOperations(errors)
+        : mode === 'vlookup' && requiredConcatOutputs && requiredConcatOutputs.size > 0
+          ? buildConcatOperations(errors, requiredConcatOutputs)
+          : []
+
+    if (mode === 'concat' && selectedConcatOps.length === 0) {
+      errors.push('Add at least one concat operation before running concat')
+    }
+    if (mode === 'vlookup' && selectedVlookupOps.length === 0) {
+      errors.push('Add at least one VLOOKUP operation before running VLOOKUP')
+    }
+
+    const resolvedBaseSheet = resolveSheetForRequest(
+      transformConfig.base_sheet,
+      errors,
+      'Base sheet'
+    )
+    if (!resolvedBaseSheet && (selectedConcatOps.length > 0 || selectedVlookupOps.length > 0)) {
       errors.push('Base sheet is required when advanced operations are configured')
     }
 
@@ -148,36 +330,29 @@ export function App() {
 
     return {
       payload: {
-        base_sheet: transformConfig.base_sheet,
-        concat_operations: concatOps,
-        vlookup_operations: vlookupOps,
+        base_sheet: resolvedBaseSheet,
+        concat_operations: selectedConcatOps,
+        vlookup_operations: selectedVlookupOps,
       },
       errors: [],
     }
   }
 
-  const runUploadAutomation = async () => {
+  const runUploadOnly = async () => {
     if (!selectedFile) {
-      setUploadError('Please select a file before running upload automation')
-      return
-    }
-
-    const { payload: transformPayload, errors: configErrors } = buildTransformConfigPayload()
-    setBuilderErrors(configErrors)
-    if (configErrors.length > 0) {
-      setUploadError('Please fix transform configuration errors before running upload automation')
+      setUploadError('Please select a file before running upload')
       return
     }
 
     setUploadLoading(true)
     setUploadError('')
+    setBuilderErrors([])
+    setTransformsApplied(false)
+    setResultSheets([])
 
     try {
       const formData = new FormData()
       formData.append('file', selectedFile)
-      if (transformPayload) {
-        formData.append('config', JSON.stringify(transformPayload))
-      }
 
       const response = await fetch('http://localhost:8000/api/automate/upload', {
         method: 'POST',
@@ -194,8 +369,8 @@ export function App() {
       const names = Object.keys(sheets)
 
       setSheetResults(sheets)
-      setResultSheets(payload.result_sheets ?? [])
-      setTransformsApplied(Boolean(payload.transforms_applied))
+      setResultSheets([])
+      setTransformsApplied(false)
       setActiveSheet(names[0] ?? '')
 
       if (!transformConfig.base_sheet && names.length > 0) {
@@ -209,6 +384,64 @@ export function App() {
       setActiveSheet('')
     } finally {
       setUploadLoading(false)
+    }
+  }
+
+  const runTransform = async (mode) => {
+    if (!selectedFile) {
+      setUploadError('Please select a file before running a transform')
+      return
+    }
+
+    const { payload: transformPayload, errors: configErrors } = buildTransformConfigPayload(mode)
+    setBuilderErrors(configErrors)
+    if (configErrors.length > 0 || !transformPayload) {
+      setUploadError('Please fix transform configuration errors before running')
+      return
+    }
+
+    if (mode === 'concat') {
+      setConcatLoading(true)
+    } else {
+      setVlookupLoading(true)
+    }
+    setUploadError('')
+
+    try {
+      const formData = new FormData()
+      formData.append('file', selectedFile)
+      formData.append('config', JSON.stringify(transformPayload))
+
+      const response = await fetch('http://localhost:8000/api/automate/upload', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const payload = await response.json()
+        throw new Error(payload.detail ?? 'Transform run failed')
+      }
+
+      const payload = await response.json()
+      const sheets = payload.sheets ?? {}
+      const names = Object.keys(sheets)
+
+      setSheetResults(sheets)
+      setResultSheets(payload.result_sheets ?? [])
+      setTransformsApplied(Boolean(payload.transforms_applied))
+      setActiveSheet(names[0] ?? '')
+    } catch (err) {
+      setUploadError(err.message)
+      setSheetResults({})
+      setResultSheets([])
+      setTransformsApplied(false)
+      setActiveSheet('')
+    } finally {
+      if (mode === 'concat') {
+        setConcatLoading(false)
+      } else {
+        setVlookupLoading(false)
+      }
     }
   }
 
@@ -285,30 +518,53 @@ export function App() {
           onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
         />
         {selectedFile ? <p className="file-meta">Selected: {selectedFile.name}</p> : null}
+        {selectedFile ? (
+          <button onClick={runUploadOnly} disabled={isAnyActionLoading}>
+            {uploadLoading ? 'Running Upload…' : 'Run Upload'}
+          </button>
+        ) : null}
 
         <section className="builder-section">
           <h3>Advanced Transform Builder</h3>
           <p className="hint">
-            Configure concat and VLOOKUP pipeline. If you need sheet/column names, run once first
-            to load metadata.
+            Configure concat and VLOOKUP pipeline. Run Upload first to load sheet and column
+            metadata from the selected file.
           </p>
 
-            <label htmlFor="base-sheet">Base Sheet</label>
-            <select
-              id="base-sheet"
-              value={transformConfig.base_sheet}
-              onChange={(event) =>
-                setTransformConfig((current) => ({ ...current, base_sheet: event.target.value }))
-              }
-            >
-              <option value="">Select base sheet</option>
-              {sheetNames.map((sheetName) => (
-                <option key={sheetName} value={sheetName}>
-                  {sheetName}
-                </option>
-              ))}
-            </select>
+          <label htmlFor="base-sheet">Base Sheet</label>
+          <select
+            id="base-sheet"
+            value={transformConfig.base_sheet}
+            onChange={(event) =>
+              setTransformConfig((current) => ({ ...current, base_sheet: event.target.value }))
+            }
+          >
+            <option value="">Select base sheet</option>
+            {sheetNames.map((sheetName) => (
+              <option key={sheetName} value={sheetName}>
+                {sheetName}
+              </option>
+            ))}
+          </select>
 
+          <div className="transform-tabs">
+            <button
+              type="button"
+              className={`transform-tab ${transformTab === 'concat' ? 'active' : ''}`}
+              onClick={() => setTransformTab('concat')}
+            >
+              Concat
+            </button>
+            <button
+              type="button"
+              className={`transform-tab ${transformTab === 'vlookup' ? 'active' : ''}`}
+              onClick={() => setTransformTab('vlookup')}
+            >
+              VLOOKUP
+            </button>
+          </div>
+
+          {transformTab === 'concat' ? (
             <div className="builder-group">
               <div className="builder-header">
                 <h4>Concat Operations</h4>
@@ -370,10 +626,18 @@ export function App() {
                               <select
                                 value={part.sheet}
                                 onChange={(event) =>
-                                  setConcatPart(operationIndex, partIndex, (current) => ({
-                                    ...current,
-                                    sheet: event.target.value,
-                                  }))
+                                  setConcatPart(operationIndex, partIndex, (current) => {
+                                    const nextSheet = event.target.value
+                                    const isSameAsBase =
+                                      Boolean(nextSheet) &&
+                                      Boolean(transformConfig.base_sheet) &&
+                                      nextSheet === transformConfig.base_sheet
+                                    return {
+                                      ...current,
+                                      sheet: nextSheet,
+                                      join_keys: isSameAsBase ? [] : current.join_keys,
+                                    }
+                                  })
                                 }
                               >
                                 <option value="">Select sheet</option>
@@ -468,7 +732,9 @@ export function App() {
                                 Add Join Key
                               </button>
                             </div>
-                          ) : null}
+                          ) : (
+                            <p className="hint">Join keys are only needed for cross-sheet concat.</p>
+                          )}
 
                           <button
                             type="button"
@@ -516,8 +782,12 @@ export function App() {
                   </div>
                 </article>
               ))}
-            </div>
 
+              <button onClick={() => runTransform('concat')} disabled={isAnyActionLoading || !selectedFile}>
+                {concatLoading ? 'Running Concat…' : 'Run Concat'}
+              </button>
+            </div>
+          ) : (
             <div className="builder-group">
               <div className="builder-header">
                 <h4>VLOOKUP Operations</h4>
@@ -534,96 +804,262 @@ export function App() {
                 </button>
               </div>
 
+              <p className="hint">
+                Mapping: lookup_value = selected base-sheet column, table_array = selected lookup
+                sheet (starting from lookup column), col_index_num = auto-computed from return
+                column, range_lookup = FALSE exact or TRUE approximate. Concat output columns are
+                available as lookup_value when concat operations are configured.
+              </p>
+
               {transformConfig.vlookup_operations.map((operation, operationIndex) => (
                 <article key={`vlookup-${operationIndex}`} className="op-card">
+                  {(() => {
+                    const requestSheet = resolveSheetNameWithoutErrors(operation.table_array_sheet)
+                    const requestColumns = columnsBySheet[requestSheet] ?? []
+                    const requestColIndex = getColIndexNum(
+                      requestColumns,
+                      operation.table_array_lookup_column,
+                      operation.return_column
+                    )
+                    return (
+                      <p className="hint">
+                        Request sheet: <strong>{requestSheet || 'N/A'}</strong>, computed col_index_num:{' '}
+                        <strong>{requestColIndex ?? 'N/A'}</strong>
+                      </p>
+                    )
+                  })()}
+                  <p className="hint">
+                    VLOOKUP(lookup_value, table_array, col_index_num, [range_lookup])
+                  </p>
                   <div className="op-grid">
                     <label>
-                      Mode
+                      Lookup Value Column
                       <select
-                        value={operation.lookup_mode}
+                        value={operation.lookup_value_column}
                         onChange={(event) =>
                           setVlookupOperation(operationIndex, (current) => ({
                             ...current,
-                            lookup_mode: event.target.value,
+                            lookup_value_column: event.target.value,
                           }))
                         }
                       >
-                        <option value="exact">Exact</option>
-                        <option value="nearest">Nearest</option>
+                        <option value="">Select base/concat column</option>
+                        {vlookupLookupValueColumns.map((column) => (
+                          <option key={`lookup-value-${column}`} value={column}>
+                            {column}
+                          </option>
+                        ))}
                       </select>
                     </label>
                     <label>
-                      Lookup Sheet
+                      Table Array Sheet
                       <select
-                        value={operation.lookup_sheet}
+                        value={operation.table_array_sheet}
                         onChange={(event) =>
                           setVlookupOperation(operationIndex, (current) => ({
                             ...current,
-                            lookup_sheet: event.target.value,
+                            table_array_sheet: event.target.value,
+                            table_array_lookup_column: '',
+                            return_column: '',
                           }))
                         }
                       >
                         <option value="">Select sheet</option>
                         {sheetNames.map((sheetName) => (
-                          <option key={`lookup-sheet-${sheetName}`} value={sheetName}>
+                          <option key={`table-array-sheet-${sheetName}`} value={sheetName}>
                             {sheetName}
                           </option>
                         ))}
                       </select>
                     </label>
                     <label>
-                      Base Key Columns (comma-separated)
-                      <input
-                        type="text"
-                        value={operation.base_key_columns}
+                      Table Array Lookup Column
+                      <select
+                        value={operation.table_array_lookup_column}
                         onChange={(event) =>
                           setVlookupOperation(operationIndex, (current) => ({
                             ...current,
-                            base_key_columns: event.target.value,
+                            table_array_lookup_column: event.target.value,
                           }))
                         }
+                      >
+                        <option value="">Select lookup column</option>
+                        {(columnsBySheet[operation.table_array_sheet] ?? []).map((column) => (
+                          <option key={`table-lookup-col-${column}`} value={column}>
+                            {column}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Return Column
+                      <select
+                        value={operation.return_column}
+                        onChange={(event) =>
+                          setVlookupOperation(operationIndex, (current) => ({
+                            ...current,
+                            return_column: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">Select return column</option>
+                        {(columnsBySheet[operation.table_array_sheet] ?? []).map((column) => (
+                          <option key={`return-col-${column}`} value={column}>
+                            {column}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      col_index_num (auto)
+                      <input
+                        type="text"
+                        value={String(
+                          getColIndexNum(
+                            columnsBySheet[
+                              resolveSheetNameWithoutErrors(operation.table_array_sheet)
+                            ] ?? [],
+                            operation.table_array_lookup_column,
+                            operation.return_column
+                          ) ?? ''
+                        )}
+                        readOnly
                       />
                     </label>
                     <label>
-                      Lookup Key Columns (comma-separated)
-                      <input
-                        type="text"
-                        value={operation.lookup_key_columns}
+                      range_lookup
+                      <select
+                        value={operation.range_lookup ? 'true' : 'false'}
                         onChange={(event) =>
                           setVlookupOperation(operationIndex, (current) => ({
                             ...current,
-                            lookup_key_columns: event.target.value,
+                            range_lookup: event.target.value === 'true',
                           }))
                         }
-                      />
+                      >
+                        <option value="false">FALSE (Exact match)</option>
+                        <option value="true">TRUE (Approximate match)</option>
+                      </select>
                     </label>
                     <label>
-                      Return Columns (comma-separated)
+                      Output Column Name
                       <input
                         type="text"
-                        value={operation.return_columns}
+                        value={operation.output_column}
                         onChange={(event) =>
                           setVlookupOperation(operationIndex, (current) => ({
                             ...current,
-                            return_columns: event.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      Output Prefix
-                      <input
-                        type="text"
-                        value={operation.output_prefix}
-                        onChange={(event) =>
-                          setVlookupOperation(operationIndex, (current) => ({
-                            ...current,
-                            output_prefix: event.target.value,
+                            output_column: event.target.value,
                           }))
                         }
                       />
                     </label>
                   </div>
+
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={operation.advanced_multi_key}
+                      onChange={(event) =>
+                        setVlookupOperation(operationIndex, (current) => ({
+                          ...current,
+                          advanced_multi_key: event.target.checked,
+                        }))
+                      }
+                    />
+                    Use advanced legacy matching
+                  </label>
+
+                  {operation.advanced_multi_key ? (
+                    <div className="op-grid">
+                      <label>
+                        Legacy Mode
+                        <select
+                          value={operation.lookup_mode}
+                          onChange={(event) =>
+                            setVlookupOperation(operationIndex, (current) => ({
+                              ...current,
+                              lookup_mode: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="exact">exact</option>
+                          <option value="nearest">nearest (advanced)</option>
+                        </select>
+                      </label>
+                      <label>
+                        Lookup Sheet
+                        <select
+                          value={operation.lookup_sheet}
+                          onChange={(event) =>
+                            setVlookupOperation(operationIndex, (current) => ({
+                              ...current,
+                              lookup_sheet: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">Select sheet</option>
+                          {sheetNames.map((sheetName) => (
+                            <option key={`legacy-lookup-sheet-${sheetName}`} value={sheetName}>
+                              {sheetName}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Base Key Columns (comma-separated)
+                        <input
+                          type="text"
+                          value={operation.base_key_columns}
+                          onChange={(event) =>
+                            setVlookupOperation(operationIndex, (current) => ({
+                              ...current,
+                              base_key_columns: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Lookup Key Columns (comma-separated)
+                        <input
+                          type="text"
+                          value={operation.lookup_key_columns}
+                          onChange={(event) =>
+                            setVlookupOperation(operationIndex, (current) => ({
+                              ...current,
+                              lookup_key_columns: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Return Columns (comma-separated)
+                        <input
+                          type="text"
+                          value={operation.return_columns}
+                          onChange={(event) =>
+                            setVlookupOperation(operationIndex, (current) => ({
+                              ...current,
+                              return_columns: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Output Prefix
+                        <input
+                          type="text"
+                          value={operation.output_prefix}
+                          onChange={(event) =>
+                            setVlookupOperation(operationIndex, (current) => ({
+                              ...current,
+                              output_prefix: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                  ) : null}
 
                   <button
                     type="button"
@@ -641,7 +1077,12 @@ export function App() {
                   </button>
                 </article>
               ))}
+
+              <button onClick={() => runTransform('vlookup')} disabled={isAnyActionLoading || !selectedFile}>
+                {vlookupLoading ? 'Running VLOOKUP…' : 'Run VLOOKUP'}
+              </button>
             </div>
+          )}
         </section>
 
         {builderErrors.length > 0 ? (
@@ -653,10 +1094,6 @@ export function App() {
             ))}
           </div>
         ) : null}
-
-        <button onClick={runUploadAutomation} disabled={uploadLoading}>
-          {uploadLoading ? 'Running Upload…' : 'Run Upload'}
-        </button>
 
         {uploadError ? <p className="error">{uploadError}</p> : null}
         {transformsApplied ? <p className="success">Transforms applied successfully.</p> : null}

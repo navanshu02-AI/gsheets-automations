@@ -25,11 +25,22 @@ class ConcatOperationConfig(BaseModel):
 
 
 class VLookupOperationConfig(BaseModel):
-    lookup_mode: Literal["exact", "nearest"]
-    base_key_columns: list[str]
-    lookup_sheet: str
-    lookup_key_columns: list[str]
-    return_columns: list[str]
+    # Preferred Excel-style fields.
+    lookup_value_column: str | None = None
+    table_array_sheet: str | None = None
+    table_array_lookup_column: str | None = None
+    col_index_num: int | None = None
+    # `None` means omitted; we treat it as approximate mode (Excel default).
+    range_lookup: bool | None = None
+    output_column: str | None = None
+    advanced_multi_key: bool = False
+
+    # Legacy fields (backward compatibility).
+    lookup_mode: Literal["exact", "nearest"] | None = None
+    base_key_columns: list[str] = Field(default_factory=list)
+    lookup_sheet: str | None = None
+    lookup_key_columns: list[str] = Field(default_factory=list)
+    return_columns: list[str] = Field(default_factory=list)
     output_prefix: str = ""
 
 
@@ -105,8 +116,166 @@ def _unique_column_name(column_name: str, existing: list[str]) -> str:
     return f"{column_name}_{index}"
 
 
+def _unique_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
 def _to_text_series(series: pd.Series) -> pd.Series:
     return series.where(series.notna(), "").astype(str)
+
+
+def _with_normalized_merge_columns(
+    frame: pd.DataFrame, key_columns: list[str], prefix: str
+) -> tuple[pd.DataFrame, list[str]]:
+    normalized = frame.copy()
+    normalized_columns: list[str] = []
+    for index, key_column in enumerate(key_columns):
+        normalized_column = f"__merge_key_{prefix}_{index}"
+        normalized[normalized_column] = normalized[key_column].astype("string")
+        normalized_columns.append(normalized_column)
+    return normalized, normalized_columns
+
+
+def _is_excel_vlookup(operation: VLookupOperationConfig) -> bool:
+    return all(
+        [
+            operation.lookup_value_column,
+            operation.table_array_sheet,
+            operation.table_array_lookup_column,
+            operation.col_index_num is not None,
+        ]
+    )
+
+
+def _is_legacy_vlookup(operation: VLookupOperationConfig) -> bool:
+    return bool(
+        operation.base_key_columns
+        or operation.lookup_key_columns
+        or operation.return_columns
+        or operation.lookup_sheet
+        or operation.lookup_mode
+    )
+
+
+def _resolve_excel_return_column(
+    lookup_frame: pd.DataFrame,
+    table_array_lookup_column: str,
+    col_index_num: int,
+    operation_index: int,
+) -> str:
+    if table_array_lookup_column not in lookup_frame.columns:
+        raise ValueError(
+            f"vlookup operation {operation_index + 1} lookup column '{table_array_lookup_column}' was not found"
+        )
+
+    if isinstance(col_index_num, bool) or not isinstance(col_index_num, int):
+        raise ValueError(
+            f"vlookup operation {operation_index + 1} col_index_num must be an integer"
+        )
+
+    if col_index_num < 1:
+        raise ValueError(
+            f"vlookup operation {operation_index + 1} col_index_num must be >= 1"
+        )
+
+    all_columns = list(lookup_frame.columns)
+    lookup_start = all_columns.index(table_array_lookup_column)
+    table_array_columns = all_columns[lookup_start:]
+
+    if col_index_num > len(table_array_columns):
+        raise ValueError(
+            f"vlookup operation {operation_index + 1} col_index_num={col_index_num} is out of bounds for table_array width {len(table_array_columns)}"
+        )
+
+    return table_array_columns[col_index_num - 1]
+
+
+def _apply_excel_vlookup(
+    base_frame: pd.DataFrame,
+    operation: VLookupOperationConfig,
+    operation_index: int,
+    lookup_frame: pd.DataFrame,
+) -> pd.DataFrame:
+    lookup_value_column = operation.lookup_value_column or ""
+    table_lookup_column = operation.table_array_lookup_column or ""
+    col_index_num = operation.col_index_num or 0
+
+    _require_columns(
+        base_frame,
+        [lookup_value_column],
+        f"vlookup operation {operation_index + 1} lookup_value column",
+    )
+    _require_columns(
+        lookup_frame,
+        [table_lookup_column],
+        f"vlookup operation {operation_index + 1} table_array lookup column",
+    )
+
+    return_column = _resolve_excel_return_column(
+        lookup_frame,
+        table_lookup_column,
+        col_index_num,
+        operation_index,
+    )
+    output_column = _unique_column_name(
+        operation.output_column or return_column, list(base_frame.columns)
+    )
+
+    exact_match = operation.range_lookup is False
+    if exact_match:
+        lookup_series = (
+            lookup_frame[[table_lookup_column, return_column]]
+            .assign(__excel_lookup_key_norm=lookup_frame[table_lookup_column].astype("string"))
+            .drop_duplicates(subset=["__excel_lookup_key_norm"], keep="first")
+            .set_index("__excel_lookup_key_norm")[return_column]
+        )
+        base_lookup_key = base_frame[lookup_value_column].astype("string")
+        result = base_frame.copy()
+        result[output_column] = base_lookup_key.map(lookup_series).fillna("#N/A")
+        return result
+
+    # Excel approximate mode: largest key <= lookup_value, with an ordered lookup column.
+    lookup_numeric = pd.to_numeric(lookup_frame[table_lookup_column], errors="coerce")
+    if lookup_numeric.isna().any():
+        raise ValueError(
+            f"vlookup operation {operation_index + 1} approximate mode requires numeric lookup column values without blanks"
+        )
+    if not lookup_numeric.is_monotonic_increasing:
+        raise ValueError(
+            f"vlookup operation {operation_index + 1} approximate mode requires lookup column sorted ascending"
+        )
+
+    base_numeric = pd.to_numeric(base_frame[lookup_value_column], errors="coerce")
+    lookup_data = lookup_frame[[table_lookup_column, return_column]].copy()
+    lookup_data["__lookup_numeric"] = lookup_numeric
+    lookup_data = lookup_data.drop_duplicates(subset=[table_lookup_column], keep="first")
+    lookup_data = lookup_data.sort_values("__lookup_numeric", kind="mergesort")
+
+    sorted_keys = lookup_data["__lookup_numeric"].to_numpy()
+    sorted_values = lookup_data[return_column].to_numpy()
+
+    output_values: list[object] = []
+    for value in base_numeric:
+        if pd.isna(value):
+            output_values.append("#N/A")
+            continue
+        index = sorted_keys.searchsorted(value, side="right") - 1
+        if index < 0:
+            output_values.append("#N/A")
+            continue
+        matched_value = sorted_values[index]
+        output_values.append("" if pd.isna(matched_value) else matched_value)
+
+    result = base_frame.copy()
+    result[output_column] = output_values
+    return result
 
 
 def _build_concat_part_series(
@@ -154,8 +323,18 @@ def _build_concat_part_series(
 
     lookup_column_name = f"__concat_part_{operation_index}_{part.column}"
     lookup_subset = lookup_subset.rename(columns={part.column: lookup_column_name})
-
-    merged = base_frame[base_keys].merge(lookup_subset, on=base_keys, how="left")
+    base_keys_frame = base_frame[base_keys].copy()
+    left_with_keys, merge_columns = _with_normalized_merge_columns(
+        base_keys_frame, base_keys, "concat"
+    )
+    right_with_keys, _ = _with_normalized_merge_columns(
+        lookup_subset, base_keys, "concat"
+    )
+    merged = left_with_keys.merge(
+        right_with_keys[merge_columns + [lookup_column_name]],
+        on=merge_columns,
+        how="left",
+    )
     return merged[lookup_column_name]
 
 
@@ -217,40 +396,63 @@ def _apply_exact_vlookup(
         operation.lookup_key_columns,
         f"vlookup operation {operation_index + 1} lookup keys",
     )
+    requested_return_columns = _unique_preserve_order(operation.return_columns)
     _require_columns(
         lookup_frame,
-        operation.return_columns,
+        requested_return_columns,
         f"vlookup operation {operation_index + 1} return columns",
     )
 
-    lookup_subset = lookup_frame[operation.lookup_key_columns + operation.return_columns].copy()
+    key_mapping = {
+        lookup_key: base_key
+        for base_key, lookup_key in zip(
+            operation.base_key_columns, operation.lookup_key_columns, strict=True
+        )
+    }
+    non_key_return_columns = [
+        column
+        for column in requested_return_columns
+        if column not in operation.lookup_key_columns
+    ]
+
+    lookup_subset_columns = _unique_preserve_order(
+        operation.lookup_key_columns + non_key_return_columns
+    )
+    lookup_subset = lookup_frame[lookup_subset_columns].copy()
     lookup_subset = lookup_subset.rename(
-        columns={
-            lookup_key: base_key
-            for base_key, lookup_key in zip(
-                operation.base_key_columns, operation.lookup_key_columns, strict=True
-            )
-        }
+        columns={lookup_key: base_key for lookup_key, base_key in key_mapping.items()}
     )
 
     renamed_return_columns = {
         return_column: f"__vlookup_{operation_index}_{return_column}"
-        for return_column in operation.return_columns
+        for return_column in non_key_return_columns
     }
     lookup_subset = lookup_subset.rename(columns=renamed_return_columns)
     lookup_subset = lookup_subset.drop_duplicates(
         subset=operation.base_key_columns, keep="first"
     )
+    left_with_keys, merge_columns = _with_normalized_merge_columns(
+        base_frame, operation.base_key_columns, "legacy"
+    )
+    right_with_keys, _ = _with_normalized_merge_columns(
+        lookup_subset, operation.base_key_columns, "legacy"
+    )
+    merged = left_with_keys.merge(
+        right_with_keys[merge_columns + list(renamed_return_columns.values())],
+        on=merge_columns,
+        how="left",
+    )
 
-    merged = base_frame.merge(lookup_subset, on=operation.base_key_columns, how="left")
-
-    for return_column in operation.return_columns:
+    for return_column in requested_return_columns:
         target_name = _unique_column_name(
             f"{operation.output_prefix}{return_column}", list(merged.columns)
         )
-        merged[target_name] = merged[renamed_return_columns[return_column]]
+        if return_column in key_mapping:
+            merged[target_name] = merged[key_mapping[return_column]]
+        else:
+            merged[target_name] = merged[renamed_return_columns[return_column]]
 
-    temp_columns = list(renamed_return_columns.values())
+    temp_columns = list(renamed_return_columns.values()) + merge_columns
     return merged.drop(columns=temp_columns)
 
 
@@ -318,27 +520,56 @@ def apply_vlookup_operations(
     transformed = base_frame.copy()
 
     for operation_index, operation in enumerate(operations):
-        if not operation.return_columns:
-            raise ValueError(
-                f"vlookup operation {operation_index + 1} requires at least one return column"
-            )
-
-        lookup_frame = _require_sheet(all_sheets, operation.lookup_sheet)
-
-        if operation.lookup_mode == "exact":
-            transformed = _apply_exact_vlookup(
+        if _is_excel_vlookup(operation):
+            lookup_frame = _require_sheet(all_sheets, operation.table_array_sheet or "")
+            transformed = _apply_excel_vlookup(
                 transformed,
                 operation,
                 operation_index,
                 lookup_frame,
             )
-        else:
-            transformed = _apply_nearest_vlookup(
-                transformed,
-                operation,
-                operation_index,
-                lookup_frame,
-            )
+            continue
+
+        if _is_legacy_vlookup(operation):
+            if not operation.lookup_sheet:
+                raise ValueError(
+                    f"vlookup operation {operation_index + 1} lookup_sheet is required for legacy mode"
+                )
+            if not operation.return_columns:
+                raise ValueError(
+                    f"vlookup operation {operation_index + 1} requires at least one return column"
+                )
+            if not operation.base_key_columns or not operation.lookup_key_columns:
+                raise ValueError(
+                    f"vlookup operation {operation_index + 1} requires base_key_columns and lookup_key_columns for legacy mode"
+                )
+
+            lookup_frame = _require_sheet(all_sheets, operation.lookup_sheet)
+            lookup_mode = operation.lookup_mode or "exact"
+
+            if lookup_mode == "exact":
+                transformed = _apply_exact_vlookup(
+                    transformed,
+                    operation,
+                    operation_index,
+                    lookup_frame,
+                )
+            else:
+                if not operation.advanced_multi_key:
+                    raise ValueError(
+                        f"vlookup operation {operation_index + 1} nearest mode is available only when advanced_multi_key is enabled"
+                    )
+                transformed = _apply_nearest_vlookup(
+                    transformed,
+                    operation,
+                    operation_index,
+                    lookup_frame,
+                )
+            continue
+
+        raise ValueError(
+            f"vlookup operation {operation_index + 1} is missing required fields. Provide Excel-style fields or legacy fields."
+        )
 
     return transformed
 
