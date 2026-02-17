@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+const envApiBase = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/$/, '')
+const isLocalApiBase = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(envApiBase)
+const API_BASE = !import.meta.env.DEV && isLocalApiBase ? '' : envApiBase
 
 const createJoinKey = () => ({ base_column: '', source_column: '' })
 const createConcatPart = () => ({ sheet: '', column: '', join_keys: [] })
