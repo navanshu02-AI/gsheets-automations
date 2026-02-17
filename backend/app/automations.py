@@ -204,6 +204,21 @@ def build_delivery_print_sheet(sheet_df: pd.DataFrame) -> pd.DataFrame | None:
     size_column = _resolve_column_name(sheet_df, ["Size", "size"])
     packed_qty_column = _resolve_column_name(sheet_df, ["Packed Qty", "packed_qty"])
     order_qty_column = _resolve_column_name(sheet_df, ["Order Qty", "order_qty", "quantity"])
+    po_column = _resolve_column_name(
+        sheet_df,
+        ["PO", "PO#", "po", "po#", "po_number", "po no", "purchase order"],
+    )
+    invoice_column = _resolve_column_name(
+        sheet_df,
+        [
+            "Invoice",
+            "Invoice#",
+            "invoice",
+            "invoice#",
+            "invoice_number",
+            "invoice no",
+        ],
+    )
     ean_column = _resolve_column_name(sheet_df, ["EAN", "ean", "ean_code"])
     carton_column = _resolve_column_name(
         sheet_df,
@@ -227,6 +242,18 @@ def build_delivery_print_sheet(sheet_df: pd.DataFrame) -> pd.DataFrame | None:
     metadata = sheet_df.attrs.get("sheet_metadata", {})
     po_number = _as_text_value(metadata.get("po_number", ""))
     invoice_number = _as_text_value(metadata.get("invoice_number", ""))
+    po_source = (
+        sheet_df[po_column].map(_as_text_value) if po_column else pd.Series([""] * len(sheet_df))
+    )
+    invoice_source = (
+        sheet_df[invoice_column].map(_as_text_value)
+        if invoice_column
+        else pd.Series([""] * len(sheet_df))
+    )
+    if po_number:
+        po_source = po_source.replace("", po_number)
+    if invoice_number:
+        invoice_source = invoice_source.replace("", invoice_number)
 
     if packed_qty_column:
         packed_series = sheet_df[packed_qty_column]
@@ -246,8 +273,8 @@ def build_delivery_print_sheet(sheet_df: pd.DataFrame) -> pd.DataFrame | None:
 
     delivery_frame = pd.DataFrame(
         {
-            "po_number": po_number,
-            "invoice_number": invoice_number,
+            "po_number": po_source,
+            "invoice_number": invoice_source,
             "carton_count": carton_source.replace("", "1"),
             "ean_code": sheet_df[ean_column].map(_as_text_value) if ean_column else "",
             "article_code": sheet_df[article_column].map(_as_text_value),

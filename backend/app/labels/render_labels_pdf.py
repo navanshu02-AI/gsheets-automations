@@ -166,11 +166,9 @@ def extract_label_rows(
                 or sheet_po
                 or parsed_po_from_filename
             )
-            invoice_value = (
-                override_invoice
-                or _to_string(record.get("invoice", ""))
-                or sheet_invoice
-            )
+            invoice_value = _to_string(record.get("invoice", "")) or sheet_invoice
+            if override_invoice:
+                invoice_value = override_invoice
             carton_value = _to_string(record.get("carton", "")) or "1"
 
             rows.append(
@@ -275,6 +273,41 @@ def _fit_label_value_font(
     return minimum
 
 
+def _truncate_text_to_width(
+    pdf: Any, text: str, font_name: str, font_size: float, max_width: float
+) -> str:
+    if max_width <= 0:
+        return ""
+    if pdf.stringWidth(text, font_name, font_size) <= max_width:
+        return text
+    ellipsis = "..."
+    ellipsis_width = pdf.stringWidth(ellipsis, font_name, font_size)
+    if ellipsis_width >= max_width:
+        return ""
+    output = text
+    while output and pdf.stringWidth(output, font_name, font_size) + ellipsis_width > max_width:
+        output = output[:-1]
+    return f"{output}{ellipsis}" if output else ""
+
+
+def _fit_text_font_size(
+    pdf: Any,
+    text: str,
+    font_name: str,
+    preferred_size: float,
+    max_width: float,
+    min_size: float = 6.0,
+) -> float:
+    if max_width <= 0:
+        return min_size
+    size = preferred_size
+    while size >= min_size:
+        if pdf.stringWidth(text, font_name, size) <= max_width:
+            return size
+        size -= 0.5
+    return min_size
+
+
 def generate_labels_pdf(rows: list[dict[str, str]], portrait: bool, padding_in: float) -> bytes:
     from reportlab.pdfgen import canvas
 
@@ -374,15 +407,30 @@ def generate_labels_pdf(rows: list[dict[str, str]], portrait: bool, padding_in: 
         header_baseline = table_top - ((header_row_height + header_font) / 2.0) + (header_font * 0.22)
         pdf.setFont("Helvetica-Bold", header_font)
         for idx, header in enumerate(("EAN Code", "Article Code", "Size", "Qty")):
-            pdf.drawString(x_edges[idx] + text_pad, header_baseline, header)
+            max_cell_width = (x_edges[idx + 1] - x_edges[idx]) - (2 * text_pad)
+            safe_header = _truncate_text_to_width(
+                pdf, header, "Helvetica-Bold", header_font, max_cell_width
+            )
+            pdf.drawString(x_edges[idx] + text_pad, header_baseline, safe_header)
 
         pdf.setFont("Helvetica", row_font)
         for row_index, row in enumerate(group_rows):
             top = table_header_bottom - (row_index * row_height)
-            baseline = top - ((row_height + row_font) / 2.0) + (row_font * 0.22)
             values = (row.get("ean_code", ""), row["article_code"], row["size"], row["qty"])
             for col_index, value in enumerate(values):
-                pdf.drawString(x_edges[col_index] + text_pad, baseline, value)
+                max_cell_width = (x_edges[col_index + 1] - x_edges[col_index]) - (2 * text_pad)
+                value_text = str(value)
+                cell_font_size = _fit_text_font_size(
+                    pdf,
+                    value_text,
+                    "Helvetica",
+                    row_font,
+                    max_cell_width,
+                    min_size=6.0,
+                )
+                cell_baseline = top - ((row_height + cell_font_size) / 2.0) + (cell_font_size * 0.22)
+                pdf.setFont("Helvetica", cell_font_size)
+                pdf.drawString(x_edges[col_index] + text_pad, cell_baseline, value_text)
 
         pdf.showPage()
 
