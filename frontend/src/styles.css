@@ -267,80 +267,6 @@ td {
   background: #f8fafc;
 }
 
-.delivery-print-preview {
-  display: grid;
-  gap: 1rem;
-}
-
-.delivery-page {
-  width: 4in;
-  height: 6in;
-  box-sizing: border-box;
-  border: 1px solid #94a3b8;
-  border-radius: 6px;
-  padding: 0.14in;
-  background: #ffffff;
-  break-after: page;
-}
-
-.delivery-page .table-wrapper {
-  border: 1px solid #000000;
-  border-radius: 0;
-  overflow: hidden;
-}
-
-.delivery-page table {
-  table-layout: fixed;
-  font-size: 0.6rem;
-}
-
-.delivery-page th,
-.delivery-page td {
-  padding: 0.05in 0.04in;
-  word-break: break-word;
-  border: 1px solid #000000;
-  text-align: left;
-}
-
-.delivery-header {
-  margin-bottom: 0.08in;
-}
-
-.delivery-header h4 {
-  margin: 0;
-  font-size: 0.92rem;
-  letter-spacing: 0.01em;
-}
-
-.delivery-meta-grid {
-  margin-top: 0.08in;
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  border: 1px solid #000000;
-}
-
-.delivery-meta-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 0.02in;
-  padding: 0.04in;
-  border-right: 1px solid #000000;
-}
-
-.delivery-meta-cell:last-child {
-  border-right: none;
-}
-
-.delivery-meta-label {
-  font-size: 0.54rem;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.delivery-meta-value {
-  font-size: 0.6rem;
-}
-
 .column-config-list {
   display: grid;
   gap: 0.6rem;
@@ -371,11 +297,6 @@ td {
   font-size: 0.9rem;
 }
 
-.delivery-table.no-borders th,
-.delivery-table.no-borders td {
-  border: none;
-}
-
 .delivery-mapping-grid {
   border: 1px solid #dbe4f0;
   border-radius: 10px;
@@ -399,58 +320,6 @@ td {
   }
 }
 
-@media print {
-  @page {
-    size: 4in 6in;
-    margin: 0;
-  }
-
-  body {
-    background: #fff;
-  }
-
-  .page > h1,
-  .page > p,
-  .panel > h2,
-  .panel > label,
-  .panel > input,
-  .panel > .file-meta,
-  .panel > button,
-  .feature-tabs,
-  .builder-section > h4,
-  .builder-section > h3,
-  .builder-section > p,
-  .builder-section > .op-grid,
-  .builder-section > .column-pills,
-  .builder-section > .column-config-list,
-  .builder-section > button {
-    display: none !important;
-  }
-
-  .page {
-    max-width: none;
-    margin: 0;
-    padding: 0;
-  }
-
-  .panel {
-    border: none;
-    padding: 0;
-    background: transparent;
-  }
-
-  .delivery-print-preview {
-    display: block;
-  }
-
-  .delivery-page {
-    width: 4in;
-    height: 6in;
-    border: none;
-    border-radius: 0;
-    margin: 0;
-    padding: 0.14in;
-    box-sizing: border-box;
-    break-after: page;
-  }
+.label-pdf-controls {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 260px));
 }

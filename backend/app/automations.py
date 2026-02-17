@@ -61,14 +61,27 @@ class TransformConfig(BaseModel):
 
 HEADER_SCAN_ROWS = 15
 HEADER_REQUIRED_COLUMNS = {"Article Code", "Size"}
-HEADER_PREFERRED_COLUMNS = {"EAN", "Order Qty", "Packed Qty", "Carton Count"}
+HEADER_PREFERRED_COLUMNS = {"EAN", "Order Qty", "Packed Qty", "Carton Count", "Carton"}
 COLUMN_ALIASES = {
     "Article Code": {"article code", "article_code"},
     "Size": {"size"},
     "EAN": {"ean", "ean code", "ean_code"},
     "Order Qty": {"order qty", "order_qty", "quantity", "order quantity"},
     "Packed Qty": {"packed qty", "packed_qty", "packed quantity"},
-    "Carton Count": {"carton count", "carton_count", "carton no", "carton number"},
+    "Carton Count": {
+        "carton",
+        "carton#",
+        "carton #",
+        "carton count",
+        "carton_count",
+        "carton no",
+        "carton no#",
+        "carton no #",
+        "carton number",
+        "cartonnumber",
+        "cartonnumber#",
+        "cartonnumber #",
+    },
 }
 
 
@@ -192,7 +205,19 @@ def build_delivery_print_sheet(sheet_df: pd.DataFrame) -> pd.DataFrame | None:
     packed_qty_column = _resolve_column_name(sheet_df, ["Packed Qty", "packed_qty"])
     order_qty_column = _resolve_column_name(sheet_df, ["Order Qty", "order_qty", "quantity"])
     ean_column = _resolve_column_name(sheet_df, ["EAN", "ean", "ean_code"])
-    carton_column = _resolve_column_name(sheet_df, ["Carton Count", "carton_count"])
+    carton_column = _resolve_column_name(
+        sheet_df,
+        [
+            "Carton",
+            "carton",
+            "Carton#",
+            "Carton #",
+            "carton#",
+            "carton #",
+            "Carton Count",
+            "carton_count",
+        ],
+    )
 
     if not article_column or not size_column:
         return None

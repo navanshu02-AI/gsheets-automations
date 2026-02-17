@@ -58,11 +58,6 @@ const DELIVERY_PRINT_FIELDS = [
 const pickFirstMatchingColumn = (columns, candidates) =>
   candidates.find((candidate) => columns.includes(candidate)) ?? ''
 
-const cartonSortValue = (value) => {
-  const numeric = Number.parseInt(String(value), 10)
-  return Number.isNaN(numeric) ? Number.MAX_SAFE_INTEGER : numeric
-}
-
 export function App() {
   const [selectedFile, setSelectedFile] = useState(null)
   const [featureTab, setFeatureTab] = useState('transform')
@@ -96,6 +91,11 @@ export function App() {
     cellPadding: 6,
   })
   const [manualInvoiceNumber, setManualInvoiceNumber] = useState('')
+  const [manualPoNumber, setManualPoNumber] = useState('')
+  const [labelsPortrait, setLabelsPortrait] = useState(false)
+  const [labelsPaddingIn, setLabelsPaddingIn] = useState('0.25')
+  const [labelsLoading, setLabelsLoading] = useState(false)
+  const [labelsError, setLabelsError] = useState('')
 
   const sheetNames = useMemo(() => Object.keys(sheetResults), [sheetResults])
   const deliverySheetCandidates = useMemo(
@@ -106,65 +106,10 @@ export function App() {
   const activeSheetResult = activeSheet ? sheetResults[activeSheet] : undefined
   const deliverySheetResult = deliverySheet ? sheetResults[deliverySheet] : undefined
   const deliveryAvailableColumns = deliverySheetResult?.columns ?? []
-  const deliveryRows = deliverySheetResult?.rows ?? []
   const hasCompleteFieldMapping = useMemo(
     () => DELIVERY_PRINT_FIELDS.every((field) => Boolean(deliveryFieldMapping[field.key])),
     [deliveryFieldMapping]
   )
-
-  const mappedDeliveryRows = useMemo(() => {
-    if (!hasCompleteFieldMapping) {
-      return []
-    }
-    return deliveryRows
-      .map((row) => {
-        const qtyRaw = row[deliveryFieldMapping.qty]
-        const qtyNumber = Number(qtyRaw)
-        return {
-          po_number: String(row.po_number ?? ''),
-          invoice_number: String(row.invoice_number ?? ''),
-          carton_count: String(row.carton_count ?? '1'),
-          ean_code: String(row[deliveryFieldMapping.ean_code] ?? ''),
-          article_code: String(row[deliveryFieldMapping.article_code] ?? ''),
-          size: String(row[deliveryFieldMapping.size] ?? ''),
-          qty: String(qtyRaw ?? ''),
-          qtyNumber: Number.isNaN(qtyNumber) ? 0 : qtyNumber,
-        }
-      })
-      .filter(
-        (row) =>
-          row.article_code.trim() &&
-          row.size.trim() &&
-          row.qtyNumber > 0
-      )
-  }, [deliveryRows, deliveryFieldMapping, hasCompleteFieldMapping])
-
-  const deliveryPages = useMemo(() => {
-    const grouped = new Map()
-    mappedDeliveryRows.forEach((row) => {
-      const cartonKey = row.carton_count.trim() || '1'
-      if (!grouped.has(cartonKey)) {
-        grouped.set(cartonKey, {
-          cartonKey,
-          poNumber: row.po_number,
-          invoiceNumber: row.invoice_number,
-          rows: [],
-        })
-      }
-      const group = grouped.get(cartonKey)
-      group.rows.push(row)
-      if (!group.poNumber && row.po_number) {
-        group.poNumber = row.po_number
-      }
-      if (!group.invoiceNumber && row.invoice_number) {
-        group.invoiceNumber = row.invoice_number
-      }
-    })
-
-    return [...grouped.values()].sort(
-      (left, right) => cartonSortValue(left.cartonKey) - cartonSortValue(right.cartonKey)
-    )
-  }, [mappedDeliveryRows])
 
   useEffect(() => {
     if (sheetNames.length === 0) {
@@ -230,7 +175,7 @@ export function App() {
     [baseSheetColumns, concatOutputColumns]
   )
 
-  const isAnyActionLoading = uploadLoading || concatLoading || vlookupLoading
+  const isAnyActionLoading = uploadLoading || concatLoading || vlookupLoading || labelsLoading
 
   const resolveSheetForRequest = (sheetName, errors, contextLabel) => {
     if (!sheetName) {
@@ -247,16 +192,6 @@ export function App() {
       return sourceCandidate
     }
 
-    return sheetName
-  }
-
-  const resolveSheetNameWithoutErrors = (sheetName) => {
-    if (!sheetName) {
-      return sheetName
-    }
-    if (sheetNames.includes(sheetName)) {
-      return getSourceSheetFromTransformed(sheetName)
-    }
     return sheetName
   }
 
@@ -570,6 +505,64 @@ export function App() {
     }
   }
 
+  const generateLabelsPdf = async () => {
+    if (!selectedFile) {
+      setLabelsError('Select and upload a file first.')
+      return
+    }
+
+    const padding = Number.parseFloat(labelsPaddingIn)
+    if (Number.isNaN(padding) || padding < 0.1 || padding > 0.4) {
+      setLabelsError('Padding must be between 0.1 and 0.4 inches.')
+      return
+    }
+
+    setLabelsLoading(true)
+    setLabelsError('')
+
+    try {
+      const formData = new FormData()
+      formData.append('file', selectedFile)
+      formData.append('mode', 'labels_pdf')
+      formData.append('portrait', labelsPortrait ? 'true' : 'false')
+      formData.append('padding_in', String(padding))
+      formData.append('manual_invoice_number', manualInvoiceNumber.trim())
+      formData.append('manual_po_number', manualPoNumber.trim())
+      formData.append('delivery_sheet', deliverySheet)
+
+      const response = await fetch('http://localhost:8000/api/automate/upload', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type') ?? ''
+        if (contentType.includes('application/json')) {
+          const payload = await response.json()
+          throw new Error(payload.detail ?? 'Label PDF generation failed')
+        }
+        throw new Error('Label PDF generation failed')
+      }
+
+      const blob = await response.blob()
+      const disposition = response.headers.get('content-disposition') ?? ''
+      const filenameMatch = disposition.match(/filename="([^"]+)"/i)
+      const filename = filenameMatch?.[1] ?? 'PO# labels.pdf'
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      setLabelsError(error.message || 'Label PDF generation failed')
+    } finally {
+      setLabelsLoading(false)
+    }
+  }
+
   const setConcatOperation = (operationIndex, updater) => {
     setTransformConfig((current) => {
       const next = [...current.concat_operations]
@@ -617,50 +610,6 @@ export function App() {
             <tr key={`row-${rowIndex}`}>
               {tableColumns.map((column) => (
                 <td key={`${rowIndex}-${column}`}>{String(row[column] ?? '')}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-
-  const renderDeliveryTable = (tableRows) => (
-    <div className="table-wrapper delivery-table-wrapper">
-      <table
-        className={`delivery-table ${deliveryTableOptions.bordered ? '' : 'no-borders'}`.trim()}
-        style={{ fontSize: `${deliveryTableOptions.fontSize}px` }}
-      >
-        {deliveryTableOptions.showHeader ? (
-          <thead>
-            <tr>
-              {DELIVERY_PRINT_FIELDS.map((field) => (
-                <th
-                  key={field.key}
-                  style={{
-                    textAlign: deliveryTableOptions.textAlign,
-                    padding: `${deliveryTableOptions.cellPadding}px`,
-                  }}
-                >
-                  {field.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-        ) : null}
-        <tbody>
-          {tableRows.map((row, rowIndex) => (
-            <tr key={`delivery-row-${rowIndex}`}>
-              {DELIVERY_PRINT_FIELDS.map((field) => (
-                <td
-                  key={`${rowIndex}-${field.key}`}
-                  style={{
-                    textAlign: deliveryTableOptions.textAlign,
-                    padding: `${deliveryTableOptions.cellPadding}px`,
-                  }}
-                >
-                  {String(row[field.key] ?? '')}
-                </td>
               ))}
             </tr>
           ))}
@@ -1392,6 +1341,15 @@ export function App() {
                     </select>
                   </label>
                   <label>
+                    Manual PO Number
+                    <input
+                      type="text"
+                      value={manualPoNumber}
+                      onChange={(event) => setManualPoNumber(event.target.value)}
+                      placeholder="Optional override"
+                    />
+                  </label>
+                  <label>
                     Manual Invoice Number
                     <input
                       type="text"
@@ -1435,45 +1393,43 @@ export function App() {
                 </div>
 
                 {!hasCompleteFieldMapping ? (
-                  <p className="error">Map all required fields before printing.</p>
-                ) : null}
-                {hasCompleteFieldMapping && mappedDeliveryRows.length === 0 ? (
-                  <p className="error">No printable rows found for the selected field mapping.</p>
+                  <p className="error">Map all required fields before generating labels.</p>
                 ) : null}
 
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  disabled={!hasCompleteFieldMapping || mappedDeliveryRows.length === 0}
-                >
-                  Print 4x6 Delivery Sheets
-                </button>
-
-                <section className="delivery-print-preview" aria-label="Delivery print preview">
-                  {deliveryPages.map((page, pageIndex) => (
-                    <article key={`delivery-page-${pageIndex}`} className="delivery-page">
-                      <header className="delivery-header">
-                        <h4>Delivery Sheet Print</h4>
-                        <div className="delivery-meta-grid">
-                          <div className="delivery-meta-cell">
-                            <span className="delivery-meta-label">PO#</span>
-                            <span className="delivery-meta-value">{page.poNumber || 'N/A'}</span>
-                          </div>
-                          <div className="delivery-meta-cell">
-                            <span className="delivery-meta-label">Invoice#</span>
-                            <span className="delivery-meta-value">
-                              {manualInvoiceNumber.trim() || page.invoiceNumber || 'N/A'}
-                            </span>
-                          </div>
-                          <div className="delivery-meta-cell">
-                            <span className="delivery-meta-label">Carton No</span>
-                            <span className="delivery-meta-value">{page.cartonKey}</span>
-                          </div>
-                        </div>
-                      </header>
-                      {renderDeliveryTable(page.rows)}
-                    </article>
-                  ))}
+                <section className="builder-section">
+                  <h4>4x6 Label Stickers</h4>
+                  <p className="hint">
+                    Generate print-ready label PDF using the same Delivery Sheet selection and invoice override above.
+                  </p>
+                  <div className="op-grid label-pdf-controls">
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={labelsPortrait}
+                        onChange={(event) => setLabelsPortrait(event.target.checked)}
+                      />
+                      Portrait (4x6)
+                    </label>
+                    <label>
+                      Padding (inches)
+                      <input
+                        type="number"
+                        min="0.1"
+                        max="0.4"
+                        step="0.01"
+                        value={labelsPaddingIn}
+                        onChange={(event) => setLabelsPaddingIn(event.target.value)}
+                      />
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={generateLabelsPdf}
+                    disabled={!selectedFile || labelsLoading}
+                  >
+                    {labelsLoading ? 'Generating Labels PDF…' : 'Generate 4x6 Labels PDF'}
+                  </button>
+                  {labelsError ? <p className="error">{labelsError}</p> : null}
                 </section>
               </>
             ) : (

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
@@ -15,6 +15,7 @@ from .automations import (
     run_automation_on_sheets,
     run_default_automation,
 )
+from .labels import extract_label_rows, generate_labels_pdf, suggest_download_filename
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 CSV_EXTENSIONS = {".csv"}
@@ -33,6 +34,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 
@@ -89,10 +91,17 @@ def _parse_transform_config(config: str | None) -> TransformConfig | None:
         raise HTTPException(status_code=400, detail=f"Invalid transform config: {exc}") from exc
 
 
-@app.post("/api/automate/upload")
+@app.post("/api/automate/upload", response_model=None)
 async def automate_upload(
-    file: UploadFile = File(...), config: str | None = Form(default=None)
-) -> dict[str, object]:
+    file: UploadFile = File(...),
+    config: str | None = Form(default=None),
+    mode: str | None = Form(default=None),
+    portrait: bool = Form(default=False),
+    padding_in: float = Form(default=0.25),
+    manual_invoice_number: str | None = Form(default=None),
+    manual_po_number: str | None = Form(default=None),
+    delivery_sheet: str | None = Form(default=None),
+) -> object:
     filename = file.filename or ""
     extension = Path(filename).suffix.lower()
     content_type = (file.content_type or "").lower()
@@ -122,10 +131,31 @@ async def automate_upload(
     )
 
     parsed_config = _parse_transform_config(config)
+    requested_mode = (mode or "").strip().lower()
 
     try:
         if is_csv:
-            automated_sheets = run_automation_on_sheets({"data": parse_csv_bytes(file_bytes)})
+            parsed_sheets = {"data": parse_csv_bytes(file_bytes)}
+            if requested_mode == "labels_pdf":
+                automated_sheets = run_automation_on_sheets(parsed_sheets)
+                label_rows = extract_label_rows(
+                    automated_sheets,
+                    filename_hint=filename,
+                    invoice_override=manual_invoice_number or "",
+                    po_override=manual_po_number or "",
+                    preferred_sheet=delivery_sheet or "",
+                )
+                pdf_bytes = generate_labels_pdf(
+                    label_rows, portrait=portrait, padding_in=padding_in
+                )
+                filename = suggest_download_filename(label_rows)
+                return Response(
+                    content=pdf_bytes,
+                    media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                )
+
+            automated_sheets = run_automation_on_sheets(parsed_sheets)
             result_sheets: list[str] = []
             output_sheets = automated_sheets
 
@@ -143,6 +173,25 @@ async def automate_upload(
 
         if is_excel:
             parsed_sheets = parse_excel_bytes(file_bytes)
+            if requested_mode == "labels_pdf":
+                automated_sheets = run_automation_on_sheets(parsed_sheets)
+                label_rows = extract_label_rows(
+                    automated_sheets,
+                    filename_hint=filename,
+                    invoice_override=manual_invoice_number or "",
+                    po_override=manual_po_number or "",
+                    preferred_sheet=delivery_sheet or "",
+                )
+                pdf_bytes = generate_labels_pdf(
+                    label_rows, portrait=portrait, padding_in=padding_in
+                )
+                filename = suggest_download_filename(label_rows)
+                return Response(
+                    content=pdf_bytes,
+                    media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                )
+
             automated_sheets = run_automation_on_sheets(parsed_sheets)
             result_sheets = []
             output_sheets = automated_sheets
@@ -163,11 +212,20 @@ async def automate_upload(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ImportError as exc:
-        if "openpyxl" in str(exc).lower():
+        message = str(exc).lower()
+        if "openpyxl" in message:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Missing dependency 'openpyxl'. Install backend dependencies with: "
+                    "pip install -r backend/requirements.txt"
+                ),
+            ) from exc
+        if "reportlab" in message:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Missing dependency 'reportlab'. Install backend dependencies with: "
                     "pip install -r backend/requirements.txt"
                 ),
             ) from exc
