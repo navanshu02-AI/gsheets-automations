@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile, status
@@ -28,9 +29,16 @@ EXCEL_CONTENT_TYPES = {
 
 app = FastAPI(title="Spreadsheet Automations API")
 
+default_cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", ",".join(default_cors_origins)).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

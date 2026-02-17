@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+
 const createJoinKey = () => ({ base_column: '', source_column: '' })
 const createConcatPart = () => ({ sheet: '', column: '', join_keys: [] })
 const createConcatOperation = () => ({
@@ -414,7 +416,7 @@ export function App() {
       const formData = new FormData()
       formData.append('file', selectedFile)
 
-      const response = await fetch('http://localhost:8000/api/automate/upload', {
+      const response = await fetch(`${API_BASE}/api/automate/upload`, {
         method: 'POST',
         body: formData,
       })
@@ -472,7 +474,7 @@ export function App() {
       formData.append('file', selectedFile)
       formData.append('config', JSON.stringify(transformPayload))
 
-      const response = await fetch('http://localhost:8000/api/automate/upload', {
+      const response = await fetch(`${API_BASE}/api/automate/upload`, {
         method: 'POST',
         body: formData,
       })
@@ -530,7 +532,7 @@ export function App() {
       formData.append('manual_po_number', manualPoNumber.trim())
       formData.append('delivery_sheet', deliverySheet)
 
-      const response = await fetch('http://localhost:8000/api/automate/upload', {
+      const response = await fetch(`${API_BASE}/api/automate/upload`, {
         method: 'POST',
         body: formData,
       })
