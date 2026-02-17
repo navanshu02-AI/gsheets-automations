@@ -1,1 +1,7 @@
--r backend/requirements.txt
+fastapi
+uvicorn
+python-multipart
+pandas
+openpyxl
+xlrd
+reportlab
