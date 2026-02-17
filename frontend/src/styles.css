@@ -63,8 +63,10 @@ select {
   font-size: 0.95rem;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
-  padding: 0.5rem 0.6rem;
+  padding: 0.42rem 0.56rem;
   background: #fff;
+  min-height: 2.35rem;
+  line-height: 1.2;
 }
 
 .toggle {
@@ -272,43 +274,71 @@ td {
 
 .delivery-page {
   width: 4in;
-  min-height: 6in;
+  height: 6in;
   box-sizing: border-box;
   border: 1px solid #94a3b8;
   border-radius: 6px;
-  padding: 0.18in;
+  padding: 0.14in;
   background: #ffffff;
   break-after: page;
 }
 
 .delivery-page .table-wrapper {
-  border: 1px solid #dbe4f0;
+  border: 1px solid #000000;
+  border-radius: 0;
+  overflow: hidden;
 }
 
 .delivery-page table {
   table-layout: fixed;
-  font-size: 0.62rem;
+  font-size: 0.6rem;
 }
 
 .delivery-page th,
 .delivery-page td {
-  padding: 0.07in 0.05in;
+  padding: 0.05in 0.04in;
   word-break: break-word;
+  border: 1px solid #000000;
+  text-align: left;
 }
 
 .delivery-header {
-  margin-bottom: 0.15in;
+  margin-bottom: 0.08in;
 }
 
 .delivery-header h4 {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: 0.92rem;
+  letter-spacing: 0.01em;
 }
 
-.delivery-header p {
-  margin: 0.05rem 0 0;
-  font-size: 0.72rem;
-  color: #334155;
+.delivery-meta-grid {
+  margin-top: 0.08in;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  border: 1px solid #000000;
+}
+
+.delivery-meta-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.02in;
+  padding: 0.04in;
+  border-right: 1px solid #000000;
+}
+
+.delivery-meta-cell:last-child {
+  border-right: none;
+}
+
+.delivery-meta-label {
+  font-size: 0.54rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.delivery-meta-value {
+  font-size: 0.6rem;
 }
 
 .column-config-list {
@@ -346,10 +376,33 @@ td {
   border: none;
 }
 
+.delivery-mapping-grid {
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  padding: 0.7rem;
+  background: #f8fbff;
+}
+
+.delivery-controls-grid {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
+@media (max-width: 900px) {
+  .delivery-controls-grid {
+    grid-template-columns: repeat(2, minmax(160px, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .delivery-controls-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media print {
   @page {
     size: 4in 6in;
-    margin: 0.2in;
+    margin: 0;
   }
 
   body {
@@ -364,6 +417,7 @@ td {
   .panel > .file-meta,
   .panel > button,
   .feature-tabs,
+  .builder-section > h4,
   .builder-section > h3,
   .builder-section > p,
   .builder-section > .op-grid,
@@ -390,12 +444,13 @@ td {
   }
 
   .delivery-page {
+    width: 4in;
+    height: 6in;
     border: none;
     border-radius: 0;
     margin: 0;
-    padding: 0;
-    min-height: auto;
-    width: auto;
+    padding: 0.14in;
+    box-sizing: border-box;
     break-after: page;
   }
 }

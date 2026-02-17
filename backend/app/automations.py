@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO, StringIO
+import re
 from typing import Literal
 
 import pandas as pd
@@ -58,6 +59,214 @@ class TransformConfig(BaseModel):
         return self
 
 
+HEADER_SCAN_ROWS = 15
+HEADER_REQUIRED_COLUMNS = {"Article Code", "Size"}
+HEADER_PREFERRED_COLUMNS = {"EAN", "Order Qty", "Packed Qty", "Carton Count"}
+COLUMN_ALIASES = {
+    "Article Code": {"article code", "article_code"},
+    "Size": {"size"},
+    "EAN": {"ean", "ean code", "ean_code"},
+    "Order Qty": {"order qty", "order_qty", "quantity", "order quantity"},
+    "Packed Qty": {"packed qty", "packed_qty", "packed quantity"},
+    "Carton Count": {"carton count", "carton_count", "carton no", "carton number"},
+}
+
+
+def _normalize_column_token(value: object) -> str:
+    text = str(value or "").strip().lower().replace("_", " ")
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _canonicalize_column_name(value: object) -> str:
+    token = _normalize_column_token(value)
+    if not token:
+        return ""
+    for canonical, aliases in COLUMN_ALIASES.items():
+        if token == _normalize_column_token(canonical) or token in aliases:
+            return canonical
+    return str(value).strip()
+
+
+def _detect_header_row(raw_frame: pd.DataFrame) -> int | None:
+    row_limit = min(len(raw_frame), HEADER_SCAN_ROWS)
+    best_row: int | None = None
+    best_score = -1
+    for row_index in range(row_limit):
+        row = raw_frame.iloc[row_index].tolist()
+        canonical_headers = {
+            _canonicalize_column_name(cell)
+            for cell in row
+            if str(cell or "").strip()
+        }
+        if not HEADER_REQUIRED_COLUMNS.issubset(canonical_headers):
+            continue
+        preferred_score = len(canonical_headers.intersection(HEADER_PREFERRED_COLUMNS))
+        if preferred_score > best_score:
+            best_score = preferred_score
+            best_row = row_index
+    return best_row
+
+
+def _dedupe_headers(headers: list[str]) -> list[str]:
+    seen: dict[str, int] = {}
+    deduped: list[str] = []
+    for index, header in enumerate(headers):
+        candidate = header.strip() if header.strip() else f"unnamed_{index + 1}"
+        count = seen.get(candidate, 0) + 1
+        seen[candidate] = count
+        deduped.append(candidate if count == 1 else f"{candidate}_{count}")
+    return deduped
+
+
+def _extract_sheet_metadata(raw_frame: pd.DataFrame, header_row_index: int | None) -> dict[str, str]:
+    row_limit = header_row_index if header_row_index is not None else min(len(raw_frame), 5)
+    row_limit = max(0, min(row_limit, len(raw_frame)))
+    text_rows: list[str] = []
+    for row_index in range(row_limit):
+        row_values = [str(cell).strip() for cell in raw_frame.iloc[row_index].tolist() if str(cell).strip()]
+        if row_values:
+            text_rows.append(" ".join(row_values))
+    joined_text = " ".join(text_rows)
+
+    po_match = re.search(r"PO#?\s*[:\-]?\s*([A-Za-z0-9\-]+)", joined_text, flags=re.IGNORECASE)
+    invoice_match = re.search(
+        r"Invoice#?\s*[:\-]?\s*([A-Za-z0-9/\-]+)", joined_text, flags=re.IGNORECASE
+    )
+
+    return {
+        "po_number": po_match.group(1).strip() if po_match else "",
+        "invoice_number": invoice_match.group(1).strip() if invoice_match else "",
+    }
+
+
+def _parse_sheet_with_header_detection(
+    raw_frame: pd.DataFrame, fallback_frame: pd.DataFrame
+) -> pd.DataFrame:
+    header_row_index = _detect_header_row(raw_frame)
+    metadata = _extract_sheet_metadata(raw_frame, header_row_index)
+    if header_row_index is None:
+        frame = fallback_frame.copy()
+        frame.attrs["sheet_metadata"] = metadata
+        return frame
+
+    raw_headers = raw_frame.iloc[header_row_index].tolist()
+    normalized_headers = [_canonicalize_column_name(value) for value in raw_headers]
+    deduped_headers = _dedupe_headers(normalized_headers)
+
+    trimmed = raw_frame.iloc[header_row_index + 1 :].copy()
+    trimmed.columns = deduped_headers
+    trimmed = trimmed.dropna(how="all")
+    trimmed.attrs["sheet_metadata"] = metadata
+    return trimmed
+
+
+def _resolve_column_name(frame: pd.DataFrame, candidates: list[str]) -> str | None:
+    normalized_to_actual = {
+        _normalize_column_token(column): str(column) for column in frame.columns
+    }
+    for candidate in candidates:
+        token = _normalize_column_token(candidate)
+        if token in normalized_to_actual:
+            return normalized_to_actual[token]
+    return None
+
+
+def _as_text_value(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if float(value).is_integer():
+            return str(int(value))
+        return str(value)
+    return str(value).strip()
+
+
+def build_delivery_print_sheet(sheet_df: pd.DataFrame) -> pd.DataFrame | None:
+    article_column = _resolve_column_name(sheet_df, ["Article Code", "article_code"])
+    size_column = _resolve_column_name(sheet_df, ["Size", "size"])
+    packed_qty_column = _resolve_column_name(sheet_df, ["Packed Qty", "packed_qty"])
+    order_qty_column = _resolve_column_name(sheet_df, ["Order Qty", "order_qty", "quantity"])
+    ean_column = _resolve_column_name(sheet_df, ["EAN", "ean", "ean_code"])
+    carton_column = _resolve_column_name(sheet_df, ["Carton Count", "carton_count"])
+
+    if not article_column or not size_column:
+        return None
+    if not packed_qty_column and not order_qty_column:
+        return None
+
+    metadata = sheet_df.attrs.get("sheet_metadata", {})
+    po_number = _as_text_value(metadata.get("po_number", ""))
+    invoice_number = _as_text_value(metadata.get("invoice_number", ""))
+
+    if packed_qty_column:
+        packed_series = sheet_df[packed_qty_column]
+        if order_qty_column:
+            order_series = sheet_df[order_qty_column]
+            packed_as_text = packed_series.astype("string").str.strip().replace("<NA>", "")
+            qty_source = packed_series.where(packed_as_text != "", other=order_series)
+        else:
+            qty_source = packed_series
+    else:
+        qty_source = sheet_df[order_qty_column]  # type: ignore[index]
+
+    qty_numeric = pd.to_numeric(qty_source, errors="coerce").fillna(0)
+    carton_source = (
+        sheet_df[carton_column].map(_as_text_value) if carton_column else pd.Series(["1"] * len(sheet_df))
+    )
+
+    delivery_frame = pd.DataFrame(
+        {
+            "po_number": po_number,
+            "invoice_number": invoice_number,
+            "carton_count": carton_source.replace("", "1"),
+            "ean_code": sheet_df[ean_column].map(_as_text_value) if ean_column else "",
+            "article_code": sheet_df[article_column].map(_as_text_value),
+            "size": sheet_df[size_column].map(_as_text_value),
+            "qty": qty_numeric,
+        }
+    )
+
+    delivery_frame = delivery_frame[
+        delivery_frame["article_code"].str.strip().ne("")
+        & delivery_frame["size"].str.strip().ne("")
+        & (delivery_frame["qty"] > 0)
+    ].copy()
+
+    if delivery_frame.empty:
+        return delivery_frame
+
+    def format_qty(value: object) -> object:
+        numeric_value = float(value)
+        if numeric_value.is_integer():
+            return int(numeric_value)
+        return numeric_value
+
+    delivery_frame["qty"] = delivery_frame["qty"].map(format_qty)
+    delivery_frame["carton_count_sort"] = pd.to_numeric(
+        delivery_frame["carton_count"], errors="coerce"
+    ).fillna(1)
+    delivery_frame = delivery_frame.sort_values(
+        by=["carton_count_sort"], kind="mergesort"
+    ).drop(columns=["carton_count_sort"])
+
+    return delivery_frame.reset_index(drop=True)
+
+
+def _delivery_sheet_name(sheet_name: str, existing_names: set[str]) -> str:
+    candidate = f"{sheet_name}__delivery_print"
+    if candidate not in existing_names:
+        return candidate
+    index = 2
+    while f"{candidate}_{index}" in existing_names:
+        index += 1
+    return f"{candidate}_{index}"
+
+
 def apply_default_automation(frame: pd.DataFrame) -> pd.DataFrame:
     """Apply a simple starter automation for spreadsheet workflows."""
     frame = frame.copy()
@@ -83,15 +292,36 @@ def parse_csv_bytes(file_bytes: bytes) -> pd.DataFrame:
 
 
 def parse_excel_bytes(file_bytes: bytes) -> dict[str, pd.DataFrame]:
-    sheets = pd.read_excel(BytesIO(file_bytes), sheet_name=None)
-    return {str(sheet_name): frame for sheet_name, frame in sheets.items()}
+    normal_sheets = pd.read_excel(BytesIO(file_bytes), sheet_name=None)
+    raw_sheets = pd.read_excel(BytesIO(file_bytes), sheet_name=None, header=None, dtype=object)
+
+    parsed_sheets: dict[str, pd.DataFrame] = {}
+    for sheet_name, normal_frame in normal_sheets.items():
+        name = str(sheet_name)
+        raw_frame = raw_sheets.get(sheet_name)
+        if raw_frame is None:
+            parsed_sheets[name] = normal_frame
+            continue
+        parsed_sheets[name] = _parse_sheet_with_header_detection(raw_frame, normal_frame)
+    return parsed_sheets
 
 
 def run_automation_on_sheets(sheets: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
-    return {
+    automated_sheets = {
         sheet_name: apply_default_automation(frame)
         for sheet_name, frame in sheets.items()
     }
+
+    used_names = set(automated_sheets.keys())
+    for sheet_name, frame in sheets.items():
+        delivery_frame = build_delivery_print_sheet(frame)
+        if delivery_frame is None:
+            continue
+        delivery_name = _delivery_sheet_name(sheet_name, used_names)
+        used_names.add(delivery_name)
+        automated_sheets[delivery_name] = delivery_frame
+
+    return automated_sheets
 
 
 def _require_sheet(all_sheets: dict[str, pd.DataFrame], sheet_name: str) -> pd.DataFrame:
@@ -162,6 +392,21 @@ def _is_legacy_vlookup(operation: VLookupOperationConfig) -> bool:
         or operation.lookup_sheet
         or operation.lookup_mode
     )
+
+
+def _resolve_vlookup_sheet_name(
+    all_sheets: dict[str, pd.DataFrame], requested_sheet: str
+) -> str:
+    if requested_sheet in all_sheets:
+        return requested_sheet
+
+    if "__transformed" in requested_sheet:
+        source_name = requested_sheet.split("__transformed")[0]
+        canonical_transformed_name = f"{source_name}__transformed"
+        if canonical_transformed_name in all_sheets:
+            return canonical_transformed_name
+
+    return requested_sheet
 
 
 def _resolve_excel_return_column(
@@ -521,7 +766,9 @@ def apply_vlookup_operations(
 
     for operation_index, operation in enumerate(operations):
         if _is_excel_vlookup(operation):
-            lookup_frame = _require_sheet(all_sheets, operation.table_array_sheet or "")
+            requested_sheet = operation.table_array_sheet or ""
+            resolved_sheet = _resolve_vlookup_sheet_name(all_sheets, requested_sheet)
+            lookup_frame = _require_sheet(all_sheets, resolved_sheet)
             transformed = _apply_excel_vlookup(
                 transformed,
                 operation,
@@ -544,7 +791,8 @@ def apply_vlookup_operations(
                     f"vlookup operation {operation_index + 1} requires base_key_columns and lookup_key_columns for legacy mode"
                 )
 
-            lookup_frame = _require_sheet(all_sheets, operation.lookup_sheet)
+            resolved_sheet = _resolve_vlookup_sheet_name(all_sheets, operation.lookup_sheet)
+            lookup_frame = _require_sheet(all_sheets, resolved_sheet)
             lookup_mode = operation.lookup_mode or "exact"
 
             if lookup_mode == "exact":
@@ -598,9 +846,12 @@ def apply_transform_pipeline(
         all_sheets,
         config.concat_operations,
     )
+    # Make the concat output addressable as `<base_sheet>__transformed` during this run.
+    runtime_sheets = dict(all_sheets)
+    runtime_sheets[f"{config.base_sheet}__transformed"] = transformed_frame
     transformed_frame = apply_vlookup_operations(
         transformed_frame,
-        all_sheets,
+        runtime_sheets,
         config.vlookup_operations,
     )
 

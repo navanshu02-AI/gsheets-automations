@@ -48,15 +48,19 @@ const getSourceSheetFromTransformed = (sheetName) => {
   return sheetName.split('__transformed')[0]
 }
 
-const chunkRows = (rows, chunkSize) => {
-  if (!Number.isFinite(chunkSize) || chunkSize <= 0) {
-    return [rows]
-  }
-  const chunks = []
-  for (let index = 0; index < rows.length; index += chunkSize) {
-    chunks.push(rows.slice(index, index + chunkSize))
-  }
-  return chunks
+const DELIVERY_PRINT_FIELDS = [
+  { key: 'ean_code', label: 'EAN Code', candidates: ['ean_code', 'EAN', 'ean'] },
+  { key: 'article_code', label: 'Article Code', candidates: ['article_code', 'Article Code'] },
+  { key: 'size', label: 'Size', candidates: ['size', 'Size'] },
+  { key: 'qty', label: 'Qty', candidates: ['qty', 'Packed Qty', 'Order Qty'] },
+]
+
+const pickFirstMatchingColumn = (columns, candidates) =>
+  candidates.find((candidate) => columns.includes(candidate)) ?? ''
+
+const cartonSortValue = (value) => {
+  const numeric = Number.parseInt(String(value), 10)
+  return Number.isNaN(numeric) ? Number.MAX_SAFE_INTEGER : numeric
 }
 
 export function App() {
@@ -78,8 +82,12 @@ export function App() {
     vlookup_operations: [],
   })
   const [deliverySheet, setDeliverySheet] = useState('')
-  const [deliveryColumns, setDeliveryColumns] = useState([])
-  const [deliveryRowsPerPage, setDeliveryRowsPerPage] = useState(10)
+  const [deliveryFieldMapping, setDeliveryFieldMapping] = useState({
+    ean_code: '',
+    article_code: '',
+    size: '',
+    qty: '',
+  })
   const [deliveryTableOptions, setDeliveryTableOptions] = useState({
     showHeader: true,
     bordered: true,
@@ -87,48 +95,114 @@ export function App() {
     fontSize: 10,
     cellPadding: 6,
   })
-  const [deliveryColumnSettings, setDeliveryColumnSettings] = useState({})
+  const [manualInvoiceNumber, setManualInvoiceNumber] = useState('')
 
   const sheetNames = useMemo(() => Object.keys(sheetResults), [sheetResults])
+  const deliverySheetCandidates = useMemo(
+    () => sheetNames.filter((sheetName) => sheetName.includes('__delivery_print')),
+    [sheetNames]
+  )
   const hasUploadResults = useMemo(() => sheetNames.length > 0, [sheetNames])
   const activeSheetResult = activeSheet ? sheetResults[activeSheet] : undefined
   const deliverySheetResult = deliverySheet ? sheetResults[deliverySheet] : undefined
   const deliveryAvailableColumns = deliverySheetResult?.columns ?? []
-  const selectedDeliveryColumns = deliveryColumns
   const deliveryRows = deliverySheetResult?.rows ?? []
-  const deliveryPages = useMemo(
-    () => chunkRows(deliveryRows, deliveryRowsPerPage),
-    [deliveryRows, deliveryRowsPerPage]
+  const hasCompleteFieldMapping = useMemo(
+    () => DELIVERY_PRINT_FIELDS.every((field) => Boolean(deliveryFieldMapping[field.key])),
+    [deliveryFieldMapping]
   )
+
+  const mappedDeliveryRows = useMemo(() => {
+    if (!hasCompleteFieldMapping) {
+      return []
+    }
+    return deliveryRows
+      .map((row) => {
+        const qtyRaw = row[deliveryFieldMapping.qty]
+        const qtyNumber = Number(qtyRaw)
+        return {
+          po_number: String(row.po_number ?? ''),
+          invoice_number: String(row.invoice_number ?? ''),
+          carton_count: String(row.carton_count ?? '1'),
+          ean_code: String(row[deliveryFieldMapping.ean_code] ?? ''),
+          article_code: String(row[deliveryFieldMapping.article_code] ?? ''),
+          size: String(row[deliveryFieldMapping.size] ?? ''),
+          qty: String(qtyRaw ?? ''),
+          qtyNumber: Number.isNaN(qtyNumber) ? 0 : qtyNumber,
+        }
+      })
+      .filter(
+        (row) =>
+          row.article_code.trim() &&
+          row.size.trim() &&
+          row.qtyNumber > 0
+      )
+  }, [deliveryRows, deliveryFieldMapping, hasCompleteFieldMapping])
+
+  const deliveryPages = useMemo(() => {
+    const grouped = new Map()
+    mappedDeliveryRows.forEach((row) => {
+      const cartonKey = row.carton_count.trim() || '1'
+      if (!grouped.has(cartonKey)) {
+        grouped.set(cartonKey, {
+          cartonKey,
+          poNumber: row.po_number,
+          invoiceNumber: row.invoice_number,
+          rows: [],
+        })
+      }
+      const group = grouped.get(cartonKey)
+      group.rows.push(row)
+      if (!group.poNumber && row.po_number) {
+        group.poNumber = row.po_number
+      }
+      if (!group.invoiceNumber && row.invoice_number) {
+        group.invoiceNumber = row.invoice_number
+      }
+    })
+
+    return [...grouped.values()].sort(
+      (left, right) => cartonSortValue(left.cartonKey) - cartonSortValue(right.cartonKey)
+    )
+  }, [mappedDeliveryRows])
 
   useEffect(() => {
     if (sheetNames.length === 0) {
       setDeliverySheet('')
-      setDeliveryColumns([])
+      return
+    }
+    const preferredSheet = deliverySheetCandidates[0] ?? sheetNames[0]
+    if (
+      deliverySheetCandidates.length > 0 &&
+      deliverySheet &&
+      !deliverySheet.includes('__delivery_print')
+    ) {
+      setDeliverySheet(preferredSheet)
       return
     }
     if (!deliverySheet || !sheetNames.includes(deliverySheet)) {
-      setDeliverySheet(sheetNames[0])
+      setDeliverySheet(preferredSheet)
     }
-  }, [sheetNames, deliverySheet])
+  }, [sheetNames, deliverySheet, deliverySheetCandidates])
 
   useEffect(() => {
     if (deliveryAvailableColumns.length === 0) {
-      setDeliveryColumns([])
-      setDeliveryColumnSettings({})
+      setDeliveryFieldMapping({
+        ean_code: '',
+        article_code: '',
+        size: '',
+        qty: '',
+      })
       return
     }
-    setDeliveryColumns((current) => {
-      const filtered = current.filter((column) => deliveryAvailableColumns.includes(column))
-      return filtered.length > 0 ? filtered : deliveryAvailableColumns.slice(0, 4)
-    })
-    setDeliveryColumnSettings((current) => {
-      const next = {}
-      deliveryAvailableColumns.forEach((column) => {
-        const existing = current[column] ?? {}
-        next[column] = {
-          label: existing.label ?? column,
-          width: Number.isFinite(existing.width) ? existing.width : 25,
+    setDeliveryFieldMapping((current) => {
+      const next = { ...current }
+      DELIVERY_PRINT_FIELDS.forEach((field) => {
+        const currentSelection = current[field.key]
+        if (currentSelection && deliveryAvailableColumns.includes(currentSelection)) {
+          next[field.key] = currentSelection
+        } else {
+          next[field.key] = pickFirstMatchingColumn(deliveryAvailableColumns, field.candidates)
         }
       })
       return next
@@ -255,13 +329,7 @@ export function App() {
         const lookupKeys = parseCsvList(operation.lookup_key_columns)
         const returnColumns = parseCsvList(operation.return_columns)
 
-        const resolvedLookupSheet = resolveSheetForRequest(
-          operation.lookup_sheet,
-          errors,
-          `VLOOKUP operation ${operationIndex + 1}`
-        )
-
-        if (!resolvedLookupSheet) {
+        if (!operation.lookup_sheet) {
           errors.push(`VLOOKUP operation ${operationIndex + 1}: lookup sheet is required`)
         }
         if (baseKeys.length === 0) {
@@ -278,7 +346,7 @@ export function App() {
           advanced_multi_key: true,
           lookup_mode: operation.lookup_mode,
           base_key_columns: baseKeys,
-          lookup_sheet: resolvedLookupSheet,
+          lookup_sheet: operation.lookup_sheet,
           lookup_key_columns: lookupKeys,
           return_columns: returnColumns,
           output_prefix: operation.output_prefix,
@@ -288,13 +356,7 @@ export function App() {
       if (!operation.lookup_value_column) {
         errors.push(`VLOOKUP operation ${operationIndex + 1}: lookup value column is required`)
       }
-      const resolvedTableArraySheet = resolveSheetForRequest(
-        operation.table_array_sheet,
-        errors,
-        `VLOOKUP operation ${operationIndex + 1}`
-      )
-
-      if (!resolvedTableArraySheet) {
+      if (!operation.table_array_sheet) {
         errors.push(`VLOOKUP operation ${operationIndex + 1}: table array sheet is required`)
       }
       if (!operation.table_array_lookup_column) {
@@ -304,23 +366,21 @@ export function App() {
         errors.push(`VLOOKUP operation ${operationIndex + 1}: return column is required`)
       }
 
-      const lookupColumns = columnsBySheet[resolvedTableArraySheet] ?? []
+      const lookupColumns = columnsBySheet[operation.table_array_sheet] ?? []
       const colIndexNum = getColIndexNum(
         lookupColumns,
         operation.table_array_lookup_column,
         operation.return_column
       )
       if (colIndexNum === null) {
-        const selectedSheet = operation.table_array_sheet || '(none)'
-        const requestSheet = resolvedTableArraySheet || '(none)'
         errors.push(
-          `VLOOKUP operation ${operationIndex + 1}: return column must be in table_array and to the right of lookup column (selected sheet: ${selectedSheet}, request sheet: ${requestSheet})`
+          `VLOOKUP operation ${operationIndex + 1}: return column must be in table_array and to the right of lookup column`
         )
       }
 
       return {
         lookup_value_column: operation.lookup_value_column,
-        table_array_sheet: resolvedTableArraySheet,
+        table_array_sheet: operation.table_array_sheet,
         table_array_lookup_column: operation.table_array_lookup_column,
         col_index_num: colIndexNum ?? 0,
         range_lookup: operation.range_lookup,
@@ -542,40 +602,6 @@ export function App() {
     })
   }
 
-  const toggleDeliveryColumn = (columnName) => {
-    setDeliveryColumns((current) => {
-      if (current.includes(columnName)) {
-        return current.filter((column) => column !== columnName)
-      }
-      return [...current, columnName]
-    })
-  }
-
-  const setDeliveryColumnSetting = (columnName, updater) => {
-    setDeliveryColumnSettings((current) => ({
-      ...current,
-      [columnName]: updater(current[columnName] ?? { label: columnName, width: 25 }),
-    }))
-  }
-
-  const moveDeliveryColumn = (columnName, direction) => {
-    setDeliveryColumns((current) => {
-      const index = current.indexOf(columnName)
-      if (index === -1) {
-        return current
-      }
-      const nextIndex = direction === 'left' ? index - 1 : index + 1
-      if (nextIndex < 0 || nextIndex >= current.length) {
-        return current
-      }
-      const next = [...current]
-      const item = next[index]
-      next[index] = next[nextIndex]
-      next[nextIndex] = item
-      return next
-    })
-  }
-
   const renderTable = (tableColumns, tableRows) => (
     <div className="table-wrapper">
       <table>
@@ -599,7 +625,7 @@ export function App() {
     </div>
   )
 
-  const renderDeliveryTable = (tableColumns, tableRows) => (
+  const renderDeliveryTable = (tableRows) => (
     <div className="table-wrapper delivery-table-wrapper">
       <table
         className={`delivery-table ${deliveryTableOptions.bordered ? '' : 'no-borders'}`.trim()}
@@ -608,16 +634,15 @@ export function App() {
         {deliveryTableOptions.showHeader ? (
           <thead>
             <tr>
-              {tableColumns.map((column) => (
+              {DELIVERY_PRINT_FIELDS.map((field) => (
                 <th
-                  key={column}
+                  key={field.key}
                   style={{
-                    width: `${deliveryColumnSettings[column]?.width ?? 25}%`,
                     textAlign: deliveryTableOptions.textAlign,
                     padding: `${deliveryTableOptions.cellPadding}px`,
                   }}
                 >
-                  {deliveryColumnSettings[column]?.label ?? column}
+                  {field.label}
                 </th>
               ))}
             </tr>
@@ -626,15 +651,15 @@ export function App() {
         <tbody>
           {tableRows.map((row, rowIndex) => (
             <tr key={`delivery-row-${rowIndex}`}>
-              {tableColumns.map((column) => (
+              {DELIVERY_PRINT_FIELDS.map((field) => (
                 <td
-                  key={`${rowIndex}-${column}`}
+                  key={`${rowIndex}-${field.key}`}
                   style={{
                     textAlign: deliveryTableOptions.textAlign,
                     padding: `${deliveryTableOptions.cellPadding}px`,
                   }}
                 >
-                  {String(row[column] ?? '')}
+                  {String(row[field.key] ?? '')}
                 </td>
               ))}
             </tr>
@@ -976,21 +1001,6 @@ export function App() {
 
               {transformConfig.vlookup_operations.map((operation, operationIndex) => (
                 <article key={`vlookup-${operationIndex}`} className="op-card">
-                  {(() => {
-                    const requestSheet = resolveSheetNameWithoutErrors(operation.table_array_sheet)
-                    const requestColumns = columnsBySheet[requestSheet] ?? []
-                    const requestColIndex = getColIndexNum(
-                      requestColumns,
-                      operation.table_array_lookup_column,
-                      operation.return_column
-                    )
-                    return (
-                      <p className="hint">
-                        Request sheet: <strong>{requestSheet || 'N/A'}</strong>, computed col_index_num:{' '}
-                        <strong>{requestColIndex ?? 'N/A'}</strong>
-                      </p>
-                    )
-                  })()}
                   <p className="hint">
                     VLOOKUP(lookup_value, table_array, col_index_num, [range_lookup])
                   </p>
@@ -1079,9 +1089,7 @@ export function App() {
                         type="text"
                         value={String(
                           getColIndexNum(
-                            columnsBySheet[
-                              resolveSheetNameWithoutErrors(operation.table_array_sheet)
-                            ] ?? [],
+                            columnsBySheet[operation.table_array_sheet] ?? [],
                             operation.table_array_lookup_column,
                             operation.return_column
                           ) ?? ''
@@ -1309,190 +1317,161 @@ export function App() {
                       ))}
                     </select>
                   </label>
+                </div>
+
+                <h4>Field Mapping</h4>
+                <div className="op-grid delivery-mapping-grid">
+                  {DELIVERY_PRINT_FIELDS.map((field) => (
+                    <label key={`field-map-${field.key}`}>
+                      {field.label}
+                      <select
+                        value={deliveryFieldMapping[field.key]}
+                        onChange={(event) =>
+                          setDeliveryFieldMapping((current) => ({
+                            ...current,
+                            [field.key]: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">Select source column</option>
+                        {deliveryAvailableColumns.map((column) => (
+                          <option key={`field-option-${field.key}-${column}`} value={column}>
+                            {column}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+
+                <div className="op-grid delivery-controls-grid">
                   <label>
-                    Rows Per 4x6 Page
+                    Header Row
+                    <select
+                      value={deliveryTableOptions.showHeader ? 'show' : 'hide'}
+                      onChange={(event) =>
+                        setDeliveryTableOptions((current) => ({
+                          ...current,
+                          showHeader: event.target.value === 'show',
+                        }))
+                      }
+                    >
+                      <option value="show">Show</option>
+                      <option value="hide">Hide</option>
+                    </select>
+                  </label>
+                  <label>
+                    Borders
+                    <select
+                      value={deliveryTableOptions.bordered ? 'on' : 'off'}
+                      onChange={(event) =>
+                        setDeliveryTableOptions((current) => ({
+                          ...current,
+                          bordered: event.target.value === 'on',
+                        }))
+                      }
+                    >
+                      <option value="on">On</option>
+                      <option value="off">Off</option>
+                    </select>
+                  </label>
+                  <label>
+                    Text Align
+                    <select
+                      value={deliveryTableOptions.textAlign}
+                      onChange={(event) =>
+                        setDeliveryTableOptions((current) => ({
+                          ...current,
+                          textAlign: event.target.value,
+                        }))
+                      }
+                    >
+                      <option value="left">Left</option>
+                      <option value="center">Center</option>
+                      <option value="right">Right</option>
+                    </select>
+                  </label>
+                  <label>
+                    Manual Invoice Number
+                    <input
+                      type="text"
+                      value={manualInvoiceNumber}
+                      onChange={(event) => setManualInvoiceNumber(event.target.value)}
+                      placeholder="Optional override"
+                    />
+                  </label>
+                  <label>
+                    Font Size (px)
                     <input
                       type="number"
-                      min="4"
-                      max="24"
-                      value={deliveryRowsPerPage}
+                      min="7"
+                      max="18"
+                      value={deliveryTableOptions.fontSize}
                       onChange={(event) => {
                         const nextValue = Number.parseInt(event.target.value, 10)
-                        setDeliveryRowsPerPage(Number.isNaN(nextValue) ? 10 : nextValue)
+                        setDeliveryTableOptions((current) => ({
+                          ...current,
+                          fontSize: Number.isNaN(nextValue) ? 10 : nextValue,
+                        }))
+                      }}
+                    />
+                  </label>
+                  <label>
+                    Cell Padding (px)
+                    <input
+                      type="number"
+                      min="2"
+                      max="16"
+                      value={deliveryTableOptions.cellPadding}
+                      onChange={(event) => {
+                        const nextValue = Number.parseInt(event.target.value, 10)
+                        setDeliveryTableOptions((current) => ({
+                          ...current,
+                          cellPadding: Number.isNaN(nextValue) ? 6 : nextValue,
+                        }))
                       }}
                     />
                   </label>
                 </div>
 
-                <div className="column-pills">
-                  {deliveryAvailableColumns.map((column) => (
-                    <label key={`delivery-column-${column}`} className="toggle-pill">
-                      <input
-                        type="checkbox"
-                        checked={selectedDeliveryColumns.includes(column)}
-                        onChange={() => toggleDeliveryColumn(column)}
-                      />
-                      {column}
-                    </label>
-                  ))}
-                </div>
-
-                {selectedDeliveryColumns.length > 0 ? (
-                  <>
-                    <div className="op-grid">
-                      <label>
-                        Header Row
-                        <select
-                          value={deliveryTableOptions.showHeader ? 'show' : 'hide'}
-                          onChange={(event) =>
-                            setDeliveryTableOptions((current) => ({
-                              ...current,
-                              showHeader: event.target.value === 'show',
-                            }))
-                          }
-                        >
-                          <option value="show">Show</option>
-                          <option value="hide">Hide</option>
-                        </select>
-                      </label>
-                      <label>
-                        Borders
-                        <select
-                          value={deliveryTableOptions.bordered ? 'on' : 'off'}
-                          onChange={(event) =>
-                            setDeliveryTableOptions((current) => ({
-                              ...current,
-                              bordered: event.target.value === 'on',
-                            }))
-                          }
-                        >
-                          <option value="on">On</option>
-                          <option value="off">Off</option>
-                        </select>
-                      </label>
-                      <label>
-                        Text Align
-                        <select
-                          value={deliveryTableOptions.textAlign}
-                          onChange={(event) =>
-                            setDeliveryTableOptions((current) => ({
-                              ...current,
-                              textAlign: event.target.value,
-                            }))
-                          }
-                        >
-                          <option value="left">Left</option>
-                          <option value="center">Center</option>
-                          <option value="right">Right</option>
-                        </select>
-                      </label>
-                      <label>
-                        Font Size (px)
-                        <input
-                          type="number"
-                          min="7"
-                          max="18"
-                          value={deliveryTableOptions.fontSize}
-                          onChange={(event) => {
-                            const nextValue = Number.parseInt(event.target.value, 10)
-                            setDeliveryTableOptions((current) => ({
-                              ...current,
-                              fontSize: Number.isNaN(nextValue) ? 10 : nextValue,
-                            }))
-                          }}
-                        />
-                      </label>
-                      <label>
-                        Cell Padding (px)
-                        <input
-                          type="number"
-                          min="2"
-                          max="16"
-                          value={deliveryTableOptions.cellPadding}
-                          onChange={(event) => {
-                            const nextValue = Number.parseInt(event.target.value, 10)
-                            setDeliveryTableOptions((current) => ({
-                              ...current,
-                              cellPadding: Number.isNaN(nextValue) ? 6 : nextValue,
-                            }))
-                          }}
-                        />
-                      </label>
-                    </div>
-
-                    <div className="column-config-list">
-                      {selectedDeliveryColumns.map((column, index) => (
-                        <article key={`column-config-${column}`} className="column-config-card">
-                          <p className="column-config-title">{column}</p>
-                          <label>
-                            Column Label
-                            <input
-                              type="text"
-                              value={deliveryColumnSettings[column]?.label ?? column}
-                              onChange={(event) =>
-                                setDeliveryColumnSetting(column, (current) => ({
-                                  ...current,
-                                  label: event.target.value,
-                                }))
-                              }
-                            />
-                          </label>
-                          <label>
-                            Width (%)
-                            <input
-                              type="number"
-                              min="10"
-                              max="100"
-                              value={deliveryColumnSettings[column]?.width ?? 25}
-                              onChange={(event) => {
-                                const nextValue = Number.parseInt(event.target.value, 10)
-                                setDeliveryColumnSetting(column, (current) => ({
-                                  ...current,
-                                  width: Number.isNaN(nextValue) ? 25 : nextValue,
-                                }))
-                              }}
-                            />
-                          </label>
-                          <div className="inline-actions">
-                            <button
-                              type="button"
-                              onClick={() => moveDeliveryColumn(column, 'left')}
-                              disabled={index === 0}
-                            >
-                              Move Left
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => moveDeliveryColumn(column, 'right')}
-                              disabled={index === selectedDeliveryColumns.length - 1}
-                            >
-                              Move Right
-                            </button>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                  </>
+                {!hasCompleteFieldMapping ? (
+                  <p className="error">Map all required fields before printing.</p>
+                ) : null}
+                {hasCompleteFieldMapping && mappedDeliveryRows.length === 0 ? (
+                  <p className="error">No printable rows found for the selected field mapping.</p>
                 ) : null}
 
                 <button
                   type="button"
                   onClick={() => window.print()}
-                  disabled={selectedDeliveryColumns.length === 0 || deliveryRows.length === 0}
+                  disabled={!hasCompleteFieldMapping || mappedDeliveryRows.length === 0}
                 >
                   Print 4x6 Delivery Sheets
                 </button>
 
                 <section className="delivery-print-preview" aria-label="Delivery print preview">
-                  {deliveryPages.map((pageRows, pageIndex) => (
+                  {deliveryPages.map((page, pageIndex) => (
                     <article key={`delivery-page-${pageIndex}`} className="delivery-page">
                       <header className="delivery-header">
-                        <h4>Delivery Sheet</h4>
-                        <p>
-                          {deliverySheet} - Page {pageIndex + 1} of {deliveryPages.length}
-                        </p>
+                        <h4>Delivery Sheet Print</h4>
+                        <div className="delivery-meta-grid">
+                          <div className="delivery-meta-cell">
+                            <span className="delivery-meta-label">PO#</span>
+                            <span className="delivery-meta-value">{page.poNumber || 'N/A'}</span>
+                          </div>
+                          <div className="delivery-meta-cell">
+                            <span className="delivery-meta-label">Invoice#</span>
+                            <span className="delivery-meta-value">
+                              {manualInvoiceNumber.trim() || page.invoiceNumber || 'N/A'}
+                            </span>
+                          </div>
+                          <div className="delivery-meta-cell">
+                            <span className="delivery-meta-label">Carton No</span>
+                            <span className="delivery-meta-value">{page.cartonKey}</span>
+                          </div>
+                        </div>
                       </header>
-                      {renderDeliveryTable(selectedDeliveryColumns, pageRows)}
+                      {renderDeliveryTable(page.rows)}
                     </article>
                   ))}
                 </section>
