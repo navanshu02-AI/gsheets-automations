@@ -140,10 +140,9 @@ def extract_label_rows(
         normalized = frame.rename(columns=mapping)
         detected_columns[sheet_name] = [str(column) for column in frame.columns]
         has_article = "article_code" in normalized.columns
-        has_size = "size" in normalized.columns
         has_qty = "qty" in normalized.columns
 
-        if not (has_article and has_size and has_qty):
+        if not (has_article and has_qty):
             continue
 
         metadata = frame.attrs.get("sheet_metadata", {})
@@ -157,7 +156,7 @@ def extract_label_rows(
             ean_code = _to_string(record.get("ean_code", ""))
             size = _to_string(record.get("size", ""))
             qty, qty_numeric = _normalize_qty(record.get("qty", ""))
-            if not article_code or not size or qty_numeric <= 0:
+            if not article_code or qty_numeric <= 0:
                 continue
 
             po_value = (
@@ -187,14 +186,14 @@ def extract_label_rows(
         if preferred_sheet and preferred_sheet in detected_columns:
             raise ValueError(
                 "Selected delivery sheet could not be used for labels. "
-                "Expected columns mapping to Article Code, Size, and Qty. "
+                "Expected columns mapping to Article Code and Qty (Size optional). "
                 f"Detected columns: {detected_columns[preferred_sheet]}"
             )
         first_sheet = next(iter(detected_columns), "")
         if first_sheet:
             raise ValueError(
                 f"Sheet '{first_sheet}' is missing required columns for labels. "
-                "Expected columns mapping to Article Code, Size, and Qty. "
+                "Expected columns mapping to Article Code and Qty (Size optional). "
                 f"Detected columns: {detected_columns[first_sheet]}"
             )
         raise ValueError("No valid label rows found in uploaded file")

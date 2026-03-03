@@ -234,7 +234,7 @@ def build_delivery_print_sheet(sheet_df: pd.DataFrame) -> pd.DataFrame | None:
         ],
     )
 
-    if not article_column or not size_column:
+    if not article_column:
         return None
     if not packed_qty_column and not order_qty_column:
         return None
@@ -278,14 +278,13 @@ def build_delivery_print_sheet(sheet_df: pd.DataFrame) -> pd.DataFrame | None:
             "carton_count": carton_source.replace("", "1"),
             "ean_code": sheet_df[ean_column].map(_as_text_value) if ean_column else "",
             "article_code": sheet_df[article_column].map(_as_text_value),
-            "size": sheet_df[size_column].map(_as_text_value),
+            "size": sheet_df[size_column].map(_as_text_value) if size_column else "",
             "qty": qty_numeric,
         }
     )
 
     delivery_frame = delivery_frame[
         delivery_frame["article_code"].str.strip().ne("")
-        & delivery_frame["size"].str.strip().ne("")
         & (delivery_frame["qty"] > 0)
     ].copy()
 
