@@ -162,6 +162,10 @@ export function App() {
     () => classicStickerFields.filter((field) => field.column.trim()),
     [classicStickerFields]
   )
+  const classicStickerHasIncompleteFields = useMemo(
+    () => classicStickerFields.some((field) => !field.column.trim()),
+    [classicStickerFields]
+  )
   const classicStickerPaddingValue = Number.parseFloat(classicStickerPaddingIn)
   const classicStickerHasValidPadding =
     !Number.isNaN(classicStickerPaddingValue) && classicStickerPaddingValue >= 0
@@ -170,7 +174,8 @@ export function App() {
       hasUploadResults &&
       classicStickerSheet &&
       classicStickerConfiguredFields.length > 0 &&
-      classicStickerHasValidPadding
+      classicStickerHasValidPadding &&
+      !classicStickerHasIncompleteFields
   )
   const hasCompleteFieldMapping = useMemo(
     () => DELIVERY_PRINT_FIELDS.every((field) => Boolean(deliveryFieldMapping[field.key])),
@@ -692,6 +697,9 @@ export function App() {
     }
     if (Number.isNaN(padding) || padding < 0) {
       throw new Error('Padding must be 0 or greater.')
+    }
+    if (classicStickerHasIncompleteFields) {
+      throw new Error('Map or remove every added field before generating the PDF.')
     }
 
     const fields = classicStickerFields
@@ -1815,6 +1823,10 @@ export function App() {
                   <p className="hint">
                     Will generate one sticker per row from sheet {classicStickerSheet} using{' '}
                     {classicStickerConfiguredFields.length} fields at size {classicStickerLabelSize}.
+                  </p>
+                ) : classicStickerHasIncompleteFields ? (
+                  <p className="hint">
+                    One or more added fields are still unmapped. Choose a source column or remove the row.
                   </p>
                 ) : (
                   <p className="hint">
