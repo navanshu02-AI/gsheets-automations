@@ -7,6 +7,7 @@ from app.labels import (
     extract_classic_sticker_rows,
     generate_classic_stickers_pdf,
     normalize_classic_sticker_value,
+    parse_classic_sticker_config,
     resolve_classic_sticker_page_size,
     suggest_classic_sticker_filename,
 )
@@ -25,6 +26,62 @@ def _extract_media_boxes(pdf_bytes: bytes) -> list[tuple[float, float]]:
 
 
 class ClassicStickersPdfTests(unittest.TestCase):
+    def test_parse_classic_sticker_config(self):
+        config = parse_classic_sticker_config(
+            """
+            {
+              "sheet_name": "Sheet1",
+              "label_size": "4x2",
+              "padding_in": 0.1,
+              "fields": [
+                {"column": "Employee Code", "label": "Employee Code"},
+                {"column": "NAME", "label": "NAME"}
+              ]
+            }
+            """
+        )
+
+        self.assertEqual(config["sheet_name"], "Sheet1")
+        self.assertEqual(config["label_size"], "4x2")
+        self.assertEqual(config["padding_in"], 0.1)
+        self.assertEqual(
+            config["fields"],
+            [
+                {"column": "Employee Code", "label": "Employee Code"},
+                {"column": "NAME", "label": "NAME"},
+            ],
+        )
+
+    def test_parse_classic_sticker_config_rejects_invalid_json(self):
+        with self.assertRaisesRegex(ValueError, "Invalid JSON config for classic stickers"):
+            parse_classic_sticker_config("{")
+
+    def test_parse_classic_sticker_config_rejects_empty_fields(self):
+        with self.assertRaisesRegex(ValueError, "No fields selected for classic stickers"):
+            parse_classic_sticker_config(
+                """
+                {
+                  "sheet_name": "Sheet1",
+                  "label_size": "4x2",
+                  "padding_in": 0.1,
+                  "fields": []
+                }
+                """
+            )
+
+    def test_parse_classic_sticker_config_rejects_invalid_label_size(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported classic sticker label size"):
+            parse_classic_sticker_config(
+                """
+                {
+                  "sheet_name": "Sheet1",
+                  "label_size": "3x3",
+                  "padding_in": 0.1,
+                  "fields": [{"column": "NAME", "label": "NAME"}]
+                }
+                """
+            )
+
     def test_normalize_classic_sticker_value_formats_scalars(self):
         self.assertEqual(normalize_classic_sticker_value(174826.0), "174826")
         self.assertEqual(normalize_classic_sticker_value("  Chennai  "), "Chennai")

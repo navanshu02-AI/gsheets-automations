@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import json
 import re
 from typing import Any, Sequence
 
@@ -14,6 +15,61 @@ CLASSIC_STICKER_PAGE_SIZES = {
     "4x4": (4 * POINTS_PER_INCH, 4 * POINTS_PER_INCH),
     "4x6": (4 * POINTS_PER_INCH, 6 * POINTS_PER_INCH),
 }
+
+
+def parse_classic_sticker_config(config_text: str | None) -> dict[str, object]:
+    if config_text is None or not config_text.strip():
+        raise ValueError("classic_sticker_config is required for classic sticker PDF generation")
+
+    try:
+        payload = json.loads(config_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON config for classic stickers: {exc.msg}") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid JSON config for classic stickers: expected an object")
+
+    sheet_name = str(payload.get("sheet_name") or "").strip()
+    if not sheet_name:
+        raise ValueError("classic_sticker_config.sheet_name is required")
+
+    label_size = str(payload.get("label_size") or "").strip().lower()
+    if not label_size:
+        raise ValueError("classic_sticker_config.label_size is required")
+    resolve_classic_sticker_page_size(label_size)
+
+    raw_padding = payload.get("padding_in")
+    if raw_padding is None:
+        raise ValueError("classic_sticker_config.padding_in is required")
+    try:
+        padding_in = float(raw_padding)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("classic_sticker_config.padding_in must be a number") from exc
+    if padding_in < 0:
+        raise ValueError("classic_sticker_config.padding_in must be greater than or equal to 0")
+
+    fields = payload.get("fields")
+    if not isinstance(fields, list) or not fields:
+        raise ValueError("No fields selected for classic stickers")
+
+    normalized_fields: list[dict[str, str]] = []
+    for field in fields:
+        if not isinstance(field, dict):
+            raise ValueError("Each classic sticker field must be an object")
+        column = str(field.get("column") or "").strip()
+        label = str(field.get("label") or "").strip()
+        if not column:
+            raise ValueError("Each classic sticker field must include a column")
+        if not label:
+            raise ValueError("Each classic sticker field must include a label")
+        normalized_fields.append({"column": column, "label": label})
+
+    return {
+        "sheet_name": sheet_name,
+        "label_size": label_size,
+        "padding_in": padding_in,
+        "fields": normalized_fields,
+    }
 
 
 def resolve_classic_sticker_page_size(label_size: str) -> tuple[float, float]:

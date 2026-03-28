@@ -21,6 +21,7 @@ from .labels import (
     extract_label_rows,
     generate_classic_stickers_pdf,
     generate_labels_pdf,
+    parse_classic_sticker_config,
     suggest_classic_sticker_filename,
     suggest_download_filename,
 )
@@ -108,136 +109,33 @@ def _parse_transform_config(config: str | None) -> TransformConfig | None:
         raise HTTPException(status_code=400, detail=f"Invalid transform config: {exc}") from exc
 
 
-def _parse_selected_fields_payload(selected_fields: object) -> list[object]:
-    if not isinstance(selected_fields, list) or not selected_fields:
-        raise HTTPException(
-            status_code=400,
-            detail="selected_fields must be a non-empty JSON array",
-        )
-    return selected_fields
-
-
-def _parse_classic_request_options(
-    config: str | None,
-    selected_fields: str | None,
-    label_size: str | None,
-    sheet_name: str | None,
-    delivery_sheet: str | None,
-) -> tuple[list[object], str, str]:
-    config_payload: dict[str, object] = {}
-    if config is not None and config.strip():
-        try:
-            raw_payload = json.loads(config)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid config JSON: {exc.msg}",
-            ) from exc
-
-        if not isinstance(raw_payload, dict):
-            raise HTTPException(
-                status_code=400,
-                detail="config must be a JSON object for classic sticker PDF generation",
-            )
-        config_payload = raw_payload
-
-    parsed_selected_fields: object | None = None
-    if selected_fields is not None and selected_fields.strip():
-        try:
-            parsed_selected_fields = json.loads(selected_fields)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid selected_fields JSON: {exc.msg}",
-            ) from exc
-    else:
-        parsed_selected_fields = (
-            config_payload.get("selected_fields")
-            or config_payload.get("fields")
-            or config_payload.get("columns")
-        )
-
-    if parsed_selected_fields is None:
-        raise HTTPException(
-            status_code=400,
-            detail="selected_fields is required for classic sticker PDF generation",
-        )
-
-    requested_label_size = (
-        str(label_size or config_payload.get("label_size") or config_payload.get("size") or "")
-        .strip()
-        .lower()
-    )
-    requested_sheet_name = (
-        str(sheet_name or config_payload.get("sheet_name") or config_payload.get("sheet") or "")
-        .strip()
-        or (delivery_sheet or "").strip()
-    )
-
-    return (
-        _parse_selected_fields_payload(parsed_selected_fields),
-        requested_label_size,
-        requested_sheet_name,
-    )
-
-
 def _build_classic_sticker_response(
     automated_sheets: dict[str, object],
-    selected_fields: list[object],
-    label_size: str,
-    padding_in: float,
-    sheet_name: str = "",
+    classic_config: dict[str, object],
 ) -> Response:
-    requested_label_size = label_size.strip().lower()
-    if not requested_label_size:
-        raise ValueError("label_size is required for classic sticker PDF generation")
+    sheet_name = str(classic_config["sheet_name"]).strip()
+    label_size = str(classic_config["label_size"]).strip().lower()
+    padding_in = float(classic_config["padding_in"])
+    fields = list(classic_config["fields"])
 
-    requested_sheet = sheet_name.strip()
-    if requested_sheet and requested_sheet not in automated_sheets:
-        raise ValueError(f"Selected sheet '{requested_sheet}' was not found in uploaded file")
+    if sheet_name not in automated_sheets:
+        raise ValueError(f"Sheet '{sheet_name}' was not found in uploaded file")
 
-    sheet_items = (
-        [(requested_sheet, automated_sheets[requested_sheet])]
-        if requested_sheet
-        else list(automated_sheets.items())
+    sticker_rows = extract_classic_sticker_rows(automated_sheets[sheet_name], fields)
+    if not sticker_rows:
+        raise ValueError("No printable rows found for classic stickers")
+
+    pdf_bytes = generate_classic_stickers_pdf(
+        sticker_rows,
+        label_size=label_size,
+        padding_in=padding_in,
     )
-
-    matched_sheet_error: ValueError | None = None
-    matched_sheet_without_rows = False
-
-    for candidate_sheet_name, candidate_frame in sheet_items:
-        try:
-            sticker_rows = extract_classic_sticker_rows(candidate_frame, selected_fields)
-        except ValueError as exc:
-            if requested_sheet:
-                raise
-            if matched_sheet_error is None:
-                matched_sheet_error = exc
-            continue
-
-        if not sticker_rows:
-            matched_sheet_without_rows = True
-            if requested_sheet:
-                raise ValueError(
-                    f"Sheet '{candidate_sheet_name}' does not contain any printable classic sticker rows"
-                )
-            continue
-
-        pdf_bytes = generate_classic_stickers_pdf(
-            sticker_rows, label_size=requested_label_size, padding_in=padding_in
-        )
-        filename = suggest_classic_sticker_filename(requested_label_size)
-        return Response(
-            content=pdf_bytes,
-            media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
-    if matched_sheet_without_rows:
-        raise ValueError("No printable classic sticker rows found in uploaded file")
-    if matched_sheet_error is not None:
-        raise matched_sheet_error
-    raise ValueError("No sheets were available for classic sticker generation")
+    filename = suggest_classic_sticker_filename(label_size)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/automate/upload", response_model=None)
@@ -247,9 +145,7 @@ async def automate_upload(
     mode: str | None = Form(default=None),
     portrait: bool = Form(default=False),
     padding_in: float = Form(default=0.25),
-    label_size: str | None = Form(default=None),
-    selected_fields: str | None = Form(default=None),
-    sheet_name: str | None = Form(default=None),
+    classic_sticker_config: str | None = Form(default=None),
     manual_invoice_number: str | None = Form(default=None),
     manual_po_number: str | None = Form(default=None),
     delivery_sheet: str | None = Form(default=None),
@@ -286,14 +182,8 @@ async def automate_upload(
     parsed_config = (
         None if requested_mode == "classic_stickers_pdf" else _parse_transform_config(config)
     )
-    classic_options = (
-        _parse_classic_request_options(
-            config=config,
-            selected_fields=selected_fields,
-            label_size=label_size,
-            sheet_name=sheet_name,
-            delivery_sheet=delivery_sheet,
-        )
+    classic_config = (
+        parse_classic_sticker_config(classic_sticker_config)
         if requested_mode == "classic_stickers_pdf"
         else None
     )
@@ -322,13 +212,7 @@ async def automate_upload(
                 )
 
             if requested_mode == "classic_stickers_pdf":
-                return _build_classic_sticker_response(
-                    automated_sheets,
-                    selected_fields=classic_options[0] if classic_options is not None else [],
-                    label_size=classic_options[1] if classic_options is not None else "",
-                    padding_in=padding_in,
-                    sheet_name=classic_options[2] if classic_options is not None else "",
-                )
+                return _build_classic_sticker_response(automated_sheets, classic_config or {})
 
             result_sheets: list[str] = []
             output_sheets = automated_sheets
@@ -368,13 +252,7 @@ async def automate_upload(
                 )
 
             if requested_mode == "classic_stickers_pdf":
-                return _build_classic_sticker_response(
-                    automated_sheets,
-                    selected_fields=classic_options[0] if classic_options is not None else [],
-                    label_size=classic_options[1] if classic_options is not None else "",
-                    padding_in=padding_in,
-                    sheet_name=classic_options[2] if classic_options is not None else "",
-                )
+                return _build_classic_sticker_response(automated_sheets, classic_config or {})
 
             result_sheets = []
             output_sheets = automated_sheets
