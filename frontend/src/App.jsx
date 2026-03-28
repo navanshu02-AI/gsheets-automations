@@ -81,7 +81,7 @@ const dedupeClassicColumns = (columns) => {
 
 export function App() {
   const [selectedFile, setSelectedFile] = useState(null)
-  const [featureTab, setFeatureTab] = useState('transform')
+  const [featureTab, setFeatureTab] = useState('delivery')
   const [transformTab, setTransformTab] = useState('concat')
   const [uploadLoading, setUploadLoading] = useState(false)
   const [concatLoading, setConcatLoading] = useState(false)
@@ -871,13 +871,6 @@ export function App() {
         ) : null}
 
         <div className="feature-tabs">
-          <button
-            type="button"
-            className={`transform-tab ${featureTab === 'transform' ? 'active' : ''}`}
-            onClick={() => setFeatureTab('transform')}
-          >
-            Transform Builder
-          </button>
           <button
             type="button"
             className={`transform-tab ${featureTab === 'delivery' ? 'active' : ''}`}
