@@ -1714,12 +1714,17 @@ export function App() {
                         setClassicStickerFields((current) => [...current, createClassicStickerField()])
                       }
                     >
-                      Add Field
+                      Add Custom Field
                     </button>
                   </div>
                   <p className="hint">
                     Choose columns in the order they should print as `LABEL : VALUE` lines.
                   </p>
+                  {classicStickerAvailableColumns.length > 0 ? (
+                    <p className="hint">
+                      Available columns: {classicStickerAvailableColumns.join(', ')}
+                    </p>
+                  ) : null}
 
                   {!classicStickerSheet ? (
                     <p className="hint">Pick a source sheet first to load available columns.</p>
@@ -1801,7 +1806,7 @@ export function App() {
                     </div>
                   ) : (
                     <p className="hint">
-                      No fields added yet. Use `Add Field` to choose columns for the sticker.
+                      No fields added yet. Use `Add Custom Field` to create a blank field row.
                     </p>
                   )}
                 </div>

@@ -316,47 +316,73 @@ def generate_classic_stickers_pdf(
     safe_y = padding
     safe_width = page_width - (2 * padding)
     safe_height = page_height - (2 * padding)
+    content_inset = min(12.0, max(4.0, min(safe_width, safe_height) * 0.06))
 
     stream = BytesIO()
     pdf = canvas.Canvas(stream, pagesize=(page_width, page_height))
 
     for sticker in sticker_rows:
         lines = sticker["lines"]
+        pdf.setLineWidth(1.0)
+        pdf.rect(safe_x, safe_y, safe_width, safe_height, stroke=1, fill=0)
+        content_x = safe_x + content_inset
+        content_y = safe_y + content_inset
+        content_width = max(1.0, safe_width - (2 * content_inset))
+        content_height = max(1.0, safe_height - (2 * content_inset))
+
         preferred_size = min(
             18.0,
-            max(8.0, min(safe_width / 10.5, safe_height / max((len(lines) * 1.55), 1.0))),
+            max(8.0, min(content_width / 10.5, content_height / max((len(lines) * 1.55), 1.0))),
         )
         font_size = fit_classic_sticker_font_size(
             pdf,
             lines,
-            max_width=safe_width,
-            max_height=safe_height,
+            max_width=content_width,
+            max_height=content_height,
             preferred_size=preferred_size,
         )
         line_gap = font_size * 0.30
         line_step = font_size + line_gap
         block_height = (len(lines) * font_size) + (max(0, len(lines) - 1) * line_gap)
-        top_y = safe_y + safe_height - max(0.0, (safe_height - block_height) / 2.0)
+        top_y = content_y + content_height - max(0.0, (content_height - block_height) / 2.0)
         baseline_y = top_y - font_size
 
         for line_index, line in enumerate(lines):
             label_text = f"{line['label']} : "
             value_text = line["value"]
-            max_label_width = safe_width * 0.45
-            label_output = truncate_classic_sticker_text_to_width(
-                pdf, label_text, "Helvetica", font_size, max_label_width
-            )
+            full_label_width = pdf.stringWidth(label_text, "Helvetica", font_size)
+            full_value_width = pdf.stringWidth(value_text, "Helvetica-Bold", font_size)
+
+            if full_label_width + full_value_width <= content_width:
+                label_output = label_text
+                value_output = value_text
+            else:
+                target_label_width = min(full_label_width, content_width * 0.60)
+                target_value_width = max(0.0, content_width - target_label_width)
+
+                if full_value_width > target_value_width:
+                    target_value_width = min(full_value_width, content_width * 0.65)
+                    target_label_width = max(0.0, content_width - target_value_width)
+
+                label_output = truncate_classic_sticker_text_to_width(
+                    pdf, label_text, "Helvetica", font_size, target_label_width
+                )
+                label_width = pdf.stringWidth(label_output, "Helvetica", font_size)
+                value_output = truncate_classic_sticker_text_to_width(
+                    pdf,
+                    value_text,
+                    "Helvetica-Bold",
+                    font_size,
+                    max(0.0, content_width - label_width),
+                )
+
             label_width = pdf.stringWidth(label_output, "Helvetica", font_size)
-            value_max_width = max(0.0, safe_width - label_width)
-            value_output = truncate_classic_sticker_text_to_width(
-                pdf, value_text, "Helvetica-Bold", font_size, value_max_width
-            )
 
             y = baseline_y - (line_index * line_step)
             pdf.setFont("Helvetica", font_size)
-            pdf.drawString(safe_x, y, label_output)
+            pdf.drawString(content_x, y, label_output)
             pdf.setFont("Helvetica-Bold", font_size)
-            pdf.drawString(safe_x + label_width, y, value_output)
+            pdf.drawString(content_x + label_width, y, value_output)
 
         pdf.showPage()
 
