@@ -13,6 +13,13 @@ from app.labels import (
     validate_classic_sticker_padding,
 )
 
+try:
+    from fastapi.testclient import TestClient
+except (ModuleNotFoundError, RuntimeError):
+    TestClient = None
+else:
+    from app.main import app
+
 
 def _count_pdf_pages(pdf_bytes: bytes) -> int:
     return len(re.findall(rb"/Type\s*/Page\b", pdf_bytes))
@@ -27,6 +34,10 @@ def _extract_media_boxes(pdf_bytes: bytes) -> list[tuple[float, float]]:
 
 
 class ClassicStickersPdfTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app) if TestClient is not None else None
+
     def test_parse_classic_sticker_config(self):
         config = parse_classic_sticker_config(
             """
@@ -192,6 +203,63 @@ class ClassicStickersPdfTests(unittest.TestCase):
             ],
         )
 
+    def test_extract_classic_sticker_rows_skips_blank_values(self):
+        frame = pd.DataFrame(
+            {
+                "Employee Code": [174826],
+                "NAME": ["Abdul Khader"],
+                "SIZE": [None],
+                "LOCATION": ["  Chennai  "],
+            }
+        )
+
+        rows = extract_classic_sticker_rows(
+            frame,
+            [
+                {"column": "Employee Code", "label": "Employee Code"},
+                {"column": "NAME", "label": "NAME"},
+                {"column": "SIZE", "label": "SIZE"},
+                {"column": "LOCATION", "label": "LOCATION"},
+            ],
+        )
+
+        self.assertEqual(
+            rows[0]["lines"],
+            [
+                {"label": "Employee Code", "value": "174826"},
+                {"label": "NAME", "value": "Abdul Khader"},
+                {"label": "LOCATION", "value": "Chennai"},
+            ],
+        )
+
+    def test_extract_classic_sticker_rows_skips_entirely_empty_rows(self):
+        frame = pd.DataFrame(
+            {
+                "Employee Code": [None, 174826],
+                "NAME": ["", "Abdul Khader"],
+                "LOCATION": [None, "Chennai"],
+            }
+        )
+
+        rows = extract_classic_sticker_rows(
+            frame,
+            [
+                {"column": "Employee Code", "label": "Employee Code"},
+                {"column": "NAME", "label": "NAME"},
+                {"column": "LOCATION", "label": "LOCATION"},
+            ],
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            rows[0]["lines"],
+            [
+                {"label": "Employee Code", "value": "174826"},
+                {"label": "NAME", "value": "Abdul Khader"},
+                {"label": "LOCATION", "value": "Chennai"},
+            ],
+        )
+
     def test_extract_classic_sticker_rows_raises_for_unmatched_fields(self):
         frame = pd.DataFrame({"Employee Code": [174826], "NAME": ["Abdul Khader"]})
 
@@ -225,6 +293,15 @@ class ClassicStickersPdfTests(unittest.TestCase):
         self.assertEqual(_count_pdf_pages(pdf_bytes), 2)
         self.assertTrue(any(box == (288.0, 144.0) for box in _extract_media_boxes(pdf_bytes)))
 
+    def test_generate_classic_stickers_pdf_uses_different_page_dimensions_for_sizes(self):
+        sticker_rows = [{"lines": [{"label": "NAME", "value": "Abdul Khader"}]}]
+
+        pdf_2x2 = generate_classic_stickers_pdf(sticker_rows, label_size="2x2", padding_in=0.1)
+        pdf_4x6 = generate_classic_stickers_pdf(sticker_rows, label_size="4x6", padding_in=0.1)
+
+        self.assertTrue(any(box == (144.0, 144.0) for box in _extract_media_boxes(pdf_2x2)))
+        self.assertTrue(any(box == (288.0, 432.0) for box in _extract_media_boxes(pdf_4x6)))
+
     def test_suggest_classic_sticker_filename(self):
         self.assertEqual(
             suggest_classic_sticker_filename("orders march.xlsx", "4x6"),
@@ -236,6 +313,81 @@ class ClassicStickersPdfTests(unittest.TestCase):
             suggest_classic_sticker_filename("", "4x6"),
             "classic-stickers-4x6.pdf",
         )
+
+    @unittest.skipIf(TestClient is None, "fastapi test client requires httpx")
+    def test_api_upload_generates_classic_sticker_pdf(self):
+        csv_bytes = (
+            b"Employee Code,NAME,SIZE,LOCATION\n"
+            b"174826,Abdul Khader,XL - 42,Chennai\n"
+        )
+        response = self.client.post(
+            "/api/automate/upload",
+            files={"file": ("stickers.csv", csv_bytes, "text/csv")},
+            data={
+                "mode": "classic_stickers_pdf",
+                "classic_sticker_config": """
+                {
+                  "sheet_name": "data",
+                  "label_size": "4x2",
+                  "padding_in": 0.1,
+                  "fields": [
+                    {"column": "Employee Code", "label": "Employee Code"},
+                    {"column": "NAME", "label": "NAME"},
+                    {"column": "SIZE", "label": "SIZE"}
+                  ]
+                }
+                """,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/pdf")
+        self.assertIn("classic-stickers-4x2.pdf", response.headers["content-disposition"])
+        self.assertGreater(len(response.content), 0)
+
+    @unittest.skipIf(TestClient is None, "fastapi test client requires httpx")
+    def test_api_upload_rejects_missing_sheet(self):
+        csv_bytes = b"Employee Code,NAME\n174826,Abdul Khader\n"
+        response = self.client.post(
+            "/api/automate/upload",
+            files={"file": ("stickers.csv", csv_bytes, "text/csv")},
+            data={
+                "mode": "classic_stickers_pdf",
+                "classic_sticker_config": """
+                {
+                  "sheet_name": "MissingSheet",
+                  "label_size": "4x2",
+                  "padding_in": 0.1,
+                  "fields": [{"column": "Employee Code", "label": "Employee Code"}]
+                }
+                """,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("was not found", response.json()["detail"])
+
+    @unittest.skipIf(TestClient is None, "fastapi test client requires httpx")
+    def test_api_upload_rejects_empty_fields_config(self):
+        csv_bytes = b"Employee Code,NAME\n174826,Abdul Khader\n"
+        response = self.client.post(
+            "/api/automate/upload",
+            files={"file": ("stickers.csv", csv_bytes, "text/csv")},
+            data={
+                "mode": "classic_stickers_pdf",
+                "classic_sticker_config": """
+                {
+                  "sheet_name": "data",
+                  "label_size": "4x2",
+                  "padding_in": 0.1,
+                  "fields": []
+                }
+                """,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Select at least one field", response.json()["detail"])
 
 
 if __name__ == "__main__":
