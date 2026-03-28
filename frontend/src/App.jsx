@@ -68,11 +68,16 @@ const DELIVERY_PRINT_FIELDS = [
 
 const pickFirstMatchingColumn = (columns, candidates) =>
   candidates.find((candidate) => columns.includes(candidate)) ?? ''
-const CLASSIC_STICKER_PREVIEW_LINES = [
-  'Employee Code : 174826',
-  'NAME : Abdul Khader',
-  'SIZE : XL - 42',
-]
+const isUnnamedColumn = (value) => /^unnamed[:_]/i.test(String(value || ''))
+const dedupeClassicColumns = (columns) => {
+  const seen = new Map()
+  return columns.map((column, index) => {
+    const base = String(column || '').trim() || `unnamed_${index + 1}`
+    const count = (seen.get(base) ?? 0) + 1
+    seen.set(base, count)
+    return count === 1 ? base : `${base}_${count}`
+  })
+}
 
 export function App() {
   const [selectedFile, setSelectedFile] = useState(null)
@@ -129,7 +134,30 @@ export function App() {
   const classicStickerSheetResult = classicStickerSheet ? sheetResults[classicStickerSheet] : undefined
   const deliverySheetResult = deliverySheet ? sheetResults[deliverySheet] : undefined
   const deliveryAvailableColumns = deliverySheetResult?.columns ?? []
-  const classicStickerAvailableColumns = classicStickerSheetResult?.columns ?? []
+  const classicStickerColumnOptions = useMemo(() => {
+    const columns = classicStickerSheetResult?.columns ?? []
+    const rows = classicStickerSheetResult?.rows ?? []
+    if (columns.length === 0) {
+      return []
+    }
+
+    const allUnnamed = columns.every((column) => isUnnamedColumn(column))
+    const firstRow = rows[0] ?? null
+    if (!allUnnamed || !firstRow) {
+      return columns.map((column) => ({ value: column, label: column }))
+    }
+
+    const headerCandidates = columns.map((column, index) => {
+      const value = String(firstRow[column] ?? '').trim()
+      return value || `unnamed_${index + 1}`
+    })
+    const dedupedHeaders = dedupeClassicColumns(headerCandidates)
+    return columns.map((column, index) => ({
+      value: dedupedHeaders[index],
+      label: dedupedHeaders[index],
+    }))
+  }, [classicStickerSheetResult])
+  const classicStickerAvailableColumns = classicStickerColumnOptions.map((option) => option.value)
   const classicStickerConfiguredFields = useMemo(
     () => classicStickerFields.filter((field) => field.column.trim()),
     [classicStickerFields]
@@ -175,9 +203,7 @@ export function App() {
         return validCurrent
       }
 
-      return classicStickerAvailableColumns
-        .slice(0, Math.min(4, classicStickerAvailableColumns.length))
-        .map((column) => createClassicStickerField(column, column))
+      return classicStickerAvailableColumns.map((column) => createClassicStickerField(column, column))
     })
   }, [classicStickerAvailableColumns])
 
@@ -1629,12 +1655,7 @@ export function App() {
             <p className="hint">
               Generate classic field-value sticker PDFs from any uploaded sheet.
             </p>
-            <div className="op-card classic-stickers-placeholder">
-              <h4>Sticker Style</h4>
-              <p className="hint">Each sticker prints as a vertical stack of `LABEL : VALUE` lines.</p>
-              <pre className="classic-sticker-preview">{CLASSIC_STICKER_PREVIEW_LINES.join('\n')}</pre>
-              <p className="hint">There is no fixed number of fields. Choose as many columns as you need.</p>
-            </div>
+            <p className="hint">There is no fixed number of fields. Choose as many columns as you need.</p>
 
             {hasUploadResults ? (
               <>
@@ -1719,9 +1740,12 @@ export function App() {
                               }
                             >
                               <option value="">Select column</option>
-                              {classicStickerAvailableColumns.map((column) => (
-                                <option key={`classic-field-column-${fieldIndex}-${column}`} value={column}>
-                                  {column}
+                              {classicStickerColumnOptions.map((option) => (
+                                <option
+                                  key={`classic-field-column-${fieldIndex}-${option.value}`}
+                                  value={option.value}
+                                >
+                                  {option.label}
                                 </option>
                               ))}
                             </select>

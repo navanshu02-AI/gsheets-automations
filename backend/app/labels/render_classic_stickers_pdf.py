@@ -58,9 +58,10 @@ def parse_classic_sticker_config(config_text: str | None) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError("Classic sticker settings must be a JSON object.")
 
-    sheet_name = str(payload.get("sheet_name") or "").strip()
-    if not sheet_name:
+    raw_sheet_name = str(payload.get("sheet_name") or "")
+    if not raw_sheet_name.strip():
         raise ValueError("Choose a sheet for classic stickers.")
+    sheet_name = raw_sheet_name
 
     label_size = str(payload.get("label_size") or "").strip().lower()
     if not label_size:
@@ -165,6 +166,49 @@ def _normalize_header(value: object) -> str:
     return normalized
 
 
+def _is_unnamed_header(value: object) -> bool:
+    normalized = _normalize_header(value)
+    return bool(normalized) and normalized.startswith("unnamed")
+
+
+def _dedupe_classic_headers(headers: list[str]) -> list[str]:
+    seen: dict[str, int] = {}
+    deduped: list[str] = []
+    for index, header in enumerate(headers):
+        candidate = header.strip() if header.strip() else f"unnamed_{index + 1}"
+        count = seen.get(candidate, 0) + 1
+        seen[candidate] = count
+        deduped.append(candidate if count == 1 else f"{candidate}_{count}")
+    return deduped
+
+
+def _prepare_classic_sticker_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
+    columns = [str(column) for column in frame.columns]
+    if not columns or not all(_is_unnamed_header(column) for column in columns):
+        return frame, {str(column): str(column) for column in frame.columns}
+
+    first_row = frame.iloc[0] if len(frame.index) > 0 else None
+    if first_row is None:
+        return frame, {str(column): str(column) for column in frame.columns}
+
+    header_candidates = [normalize_classic_sticker_value(value) for value in first_row.tolist()]
+    non_empty_headers = [header for header in header_candidates if header]
+    if len(non_empty_headers) < max(1, len(columns) // 2):
+        return frame, {str(column): str(column) for column in frame.columns}
+
+    deduped_headers = _dedupe_classic_headers(header_candidates)
+    prepared = frame.iloc[1:].copy()
+    prepared.columns = deduped_headers
+    prepared = prepared.dropna(how="all")
+
+    aliases = {
+        _normalize_header(header): actual
+        for header, actual in zip(deduped_headers, prepared.columns, strict=False)
+        if _normalize_header(header)
+    }
+    return prepared, aliases
+
+
 def _coerce_classic_sticker_field(field: object) -> tuple[str, str] | None:
     if isinstance(field, str):
         key = field.strip()
@@ -198,13 +242,15 @@ def extract_classic_sticker_rows(
     if frame is None or frame.empty:
         return []
 
+    prepared_frame, prepared_aliases = _prepare_classic_sticker_frame(frame)
     resolved_fields: list[tuple[str, str]] = []
-    column_lookup = {str(column): str(column) for column in frame.columns}
+    column_lookup = {str(column): str(column) for column in prepared_frame.columns}
     normalized_lookup = {
         _normalize_header(column): str(column)
-        for column in frame.columns
+        for column in prepared_frame.columns
         if _normalize_header(column)
     }
+    normalized_lookup.update(prepared_aliases)
 
     for field in selected_fields:
         coerced = _coerce_classic_sticker_field(field)
@@ -223,11 +269,11 @@ def extract_classic_sticker_rows(
     if not resolved_fields:
         raise ValueError(
             "Selected classic sticker fields do not match any columns in the sheet. "
-            f"Available columns: {[str(column) for column in frame.columns]}"
+            f"Available columns: {[str(column) for column in prepared_frame.columns]}"
         )
 
     sticker_rows: list[dict[str, list[dict[str, str]]]] = []
-    for _, record in frame.iterrows():
+    for _, record in prepared_frame.iterrows():
         lines: list[dict[str, str]] = []
         for actual_column, label in resolved_fields:
             value = normalize_classic_sticker_value(record.get(actual_column, ""))

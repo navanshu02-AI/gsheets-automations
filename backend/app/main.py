@@ -114,7 +114,7 @@ def _build_classic_sticker_response(
     classic_config: dict[str, object],
     filename_hint: str,
 ) -> Response:
-    sheet_name = str(classic_config["sheet_name"]).strip()
+    sheet_name = str(classic_config["sheet_name"])
     label_size = str(classic_config["label_size"]).strip().lower()
     padding_in = float(classic_config["padding_in"])
     fields = list(classic_config["fields"])

@@ -64,6 +64,20 @@ class ClassicStickersPdfTests(unittest.TestCase):
             ],
         )
 
+    def test_parse_classic_sticker_config_preserves_sheet_name_spacing(self):
+        config = parse_classic_sticker_config(
+            """
+            {
+              "sheet_name": "Final ",
+              "label_size": "4x2",
+              "padding_in": 0.1,
+              "fields": [{"column": "Employee Code", "label": "Employee Code"}]
+            }
+            """
+        )
+
+        self.assertEqual(config["sheet_name"], "Final ")
+
     def test_parse_classic_sticker_config_defaults_blank_label_to_column(self):
         config = parse_classic_sticker_config(
             """
@@ -265,6 +279,35 @@ class ClassicStickersPdfTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             extract_classic_sticker_rows(frame, [{"key": "SIZE", "label": "SIZE"}])
+
+    def test_extract_classic_sticker_rows_uses_first_row_as_headers_for_unnamed_columns(self):
+        frame = pd.DataFrame(
+            {
+                "Unnamed: 0": ["Sr. No.", 1],
+                "Unnamed: 1": ["Employee Code ", 174826],
+                "Unnamed: 2": ["NAME ", "Abdul Khader"],
+                "Unnamed: 3": ["SIZE", "XL - 42"],
+            }
+        )
+
+        rows = extract_classic_sticker_rows(
+            frame,
+            [
+                {"column": "Employee Code", "label": "Employee Code"},
+                {"column": "NAME", "label": "NAME"},
+                {"column": "SIZE", "label": "SIZE"},
+            ],
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            rows[0]["lines"],
+            [
+                {"label": "Employee Code", "value": "174826"},
+                {"label": "NAME", "value": "Abdul Khader"},
+                {"label": "SIZE", "value": "XL - 42"},
+            ],
+        )
 
     def test_resolve_classic_sticker_page_size(self):
         self.assertEqual(resolve_classic_sticker_page_size("2x2"), (144.0, 144.0))
