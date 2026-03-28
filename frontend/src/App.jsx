@@ -848,10 +848,10 @@ export function App() {
 
   return (
     <main className="page">
-      <h1>Python + React Spreadsheet Automations</h1>
+      <h1>Spreadsheet Print & Sticker Automation</h1>
       <p>
-        Starter workflow for Google Sheets exports / Excel / CSV automations. Upload exported
-        CSV/XLS/XLSX files (10 MB max) and inspect normalized output.
+        Upload CSV/XLS/XLSX files (10 MB max), preview normalized sheets, generate 4x6 delivery
+        print labels, and create Classic Themes sticker PDFs with customizable fields.
       </p>
 
       <section className="panel">
