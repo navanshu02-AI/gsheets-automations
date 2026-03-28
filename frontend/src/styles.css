@@ -145,6 +145,31 @@ select {
   max-width: 720px;
 }
 
+.classic-sticker-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.classic-sticker-field-row {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  align-items: end;
+}
+
+.classic-sticker-row-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 820px) {
+  .classic-sticker-field-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .op-grid {
   display: grid;
   gap: 0.6rem;

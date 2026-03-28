@@ -26,6 +26,13 @@ const createVlookupOperation = () => ({
   return_columns: '',
   output_prefix: '',
 })
+const createClassicStickerField = (column = '', label = '') => ({ column, label })
+const CLASSIC_STICKER_SIZE_OPTIONS = [
+  { value: '2x2', label: '2 x 2 inches' },
+  { value: '4x2', label: '4 x 2 inches' },
+  { value: '4x4', label: '4 x 4 inches' },
+  { value: '4x6', label: '4 x 6 inches' },
+]
 
 const parseCsvList = (value) =>
   value
@@ -101,6 +108,11 @@ export function App() {
   const [labelsPaddingIn, setLabelsPaddingIn] = useState('0.25')
   const [labelsLoading, setLabelsLoading] = useState(false)
   const [labelsError, setLabelsError] = useState('')
+  const [classicStickerFields, setClassicStickerFields] = useState([])
+  const [classicStickerLabelSize, setClassicStickerLabelSize] = useState('4x6')
+  const [classicStickerPaddingIn, setClassicStickerPaddingIn] = useState('0.1')
+  const [classicStickersLoading, setClassicStickersLoading] = useState(false)
+  const [classicStickersError, setClassicStickersError] = useState('')
 
   const sheetNames = useMemo(() => Object.keys(sheetResults), [sheetResults])
   const deliverySheetCandidates = useMemo(
@@ -121,6 +133,7 @@ export function App() {
   useEffect(() => {
     if (sheetNames.length === 0) {
       setClassicStickerSheet('')
+      setClassicStickerFields([])
       setDeliverySheet('')
       return
     }
@@ -128,6 +141,26 @@ export function App() {
       setClassicStickerSheet(sheetNames[0])
     }
   }, [sheetNames, classicStickerSheet])
+
+  useEffect(() => {
+    if (classicStickerAvailableColumns.length === 0) {
+      setClassicStickerFields([])
+      return
+    }
+
+    setClassicStickerFields((current) => {
+      const validCurrent = current.filter(
+        (field) => !field.column || classicStickerAvailableColumns.includes(field.column)
+      )
+      if (validCurrent.length > 0) {
+        return validCurrent
+      }
+
+      return classicStickerAvailableColumns
+        .slice(0, Math.min(4, classicStickerAvailableColumns.length))
+        .map((column) => createClassicStickerField(column, column))
+    })
+  }, [classicStickerAvailableColumns])
 
   useEffect(() => {
     if (sheetNames.length === 0) {
@@ -193,7 +226,8 @@ export function App() {
     [baseSheetColumns, concatOutputColumns]
   )
 
-  const isAnyActionLoading = uploadLoading || concatLoading || vlookupLoading || labelsLoading
+  const isAnyActionLoading =
+    uploadLoading || concatLoading || vlookupLoading || labelsLoading || classicStickersLoading
 
   const resolveSheetForRequest = (sheetName, errors, contextLabel) => {
     if (!sheetName) {
@@ -578,6 +612,108 @@ export function App() {
       setLabelsError(error.message || 'Label PDF generation failed')
     } finally {
       setLabelsLoading(false)
+    }
+  }
+
+  const setClassicStickerField = (fieldIndex, updater) => {
+    setClassicStickerFields((current) => {
+      const next = [...current]
+      next[fieldIndex] = updater(next[fieldIndex])
+      return next
+    })
+  }
+
+  const moveClassicStickerField = (fieldIndex, direction) => {
+    setClassicStickerFields((current) => {
+      const targetIndex = fieldIndex + direction
+      if (targetIndex < 0 || targetIndex >= current.length) {
+        return current
+      }
+
+      const next = [...current]
+      const [field] = next.splice(fieldIndex, 1)
+      next.splice(targetIndex, 0, field)
+      return next
+    })
+  }
+
+  const buildClassicStickerConfig = () => {
+    const padding = Number.parseFloat(classicStickerPaddingIn)
+    if (!classicStickerSheet) {
+      throw new Error('Select a source sheet for classic stickers.')
+    }
+    if (!CLASSIC_STICKER_SIZE_OPTIONS.some((option) => option.value === classicStickerLabelSize)) {
+      throw new Error('Select a valid classic sticker label size.')
+    }
+    if (Number.isNaN(padding) || padding < 0) {
+      throw new Error('Padding must be 0 or greater.')
+    }
+
+    const fields = classicStickerFields
+      .map((field) => ({
+        column: field.column.trim(),
+        label: (field.label || field.column).trim() || field.column.trim(),
+      }))
+      .filter((field) => field.column)
+
+    if (fields.length === 0) {
+      throw new Error('Add at least one sticker field before generating the PDF.')
+    }
+
+    return {
+      sheet_name: classicStickerSheet,
+      label_size: classicStickerLabelSize,
+      padding_in: padding,
+      fields,
+    }
+  }
+
+  const generateClassicStickersPdf = async () => {
+    if (!selectedFile) {
+      setClassicStickersError('Select and upload a file first.')
+      return
+    }
+
+    setClassicStickersLoading(true)
+    setClassicStickersError('')
+
+    try {
+      const classicStickerConfig = buildClassicStickerConfig()
+      const formData = new FormData()
+      formData.append('file', selectedFile)
+      formData.append('mode', 'classic_stickers_pdf')
+      formData.append('classic_sticker_config', JSON.stringify(classicStickerConfig))
+
+      const response = await fetch(`${API_BASE}/api/automate/upload`, {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type') ?? ''
+        if (contentType.includes('application/json')) {
+          const payload = await response.json()
+          throw new Error(payload.detail ?? 'Classic sticker PDF generation failed')
+        }
+        throw new Error('Classic sticker PDF generation failed')
+      }
+
+      const blob = await response.blob()
+      const disposition = response.headers.get('content-disposition') ?? ''
+      const filenameMatch = disposition.match(/filename="([^"]+)"/i)
+      const filename = filenameMatch?.[1] ?? 'classic-stickers.pdf'
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      setClassicStickersError(error.message || 'Classic sticker PDF generation failed')
+    } finally {
+      setClassicStickersLoading(false)
     }
   }
 
@@ -1485,21 +1621,130 @@ export function App() {
                       ))}
                     </select>
                   </label>
+                  <label>
+                    Label Size
+                    <select
+                      value={classicStickerLabelSize}
+                      onChange={(event) => setClassicStickerLabelSize(event.target.value)}
+                    >
+                      {CLASSIC_STICKER_SIZE_OPTIONS.map((option) => (
+                        <option key={`classic-size-${option.value}`} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Padding (inches)
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={classicStickerPaddingIn}
+                      onChange={(event) => setClassicStickerPaddingIn(event.target.value)}
+                    />
+                  </label>
                 </div>
 
                 <div className="op-card classic-stickers-placeholder">
-                  <h4>Coming Next</h4>
+                  <div className="builder-header">
+                    <h4>Sticker Fields</h4>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setClassicStickerFields((current) => [...current, createClassicStickerField()])
+                      }
+                    >
+                      Add Field
+                    </button>
+                  </div>
                   <p className="hint">
-                    Field mapping, label size, and PDF controls will appear here for the selected sheet.
+                    Choose columns in the order they should print as `LABEL : VALUE` lines.
                   </p>
-                  {classicStickerAvailableColumns.length > 0 ? (
-                    <p className="hint">
-                      Available columns: {classicStickerAvailableColumns.join(', ')}
-                    </p>
+
+                  {classicStickerFields.length > 0 ? (
+                    <div className="classic-sticker-fields">
+                      {classicStickerFields.map((field, fieldIndex) => (
+                        <div key={`classic-field-${fieldIndex}`} className="classic-sticker-field-row">
+                          <label>
+                            Source Column
+                            <select
+                              value={field.column}
+                              onChange={(event) =>
+                                setClassicStickerField(fieldIndex, (current) => ({
+                                  ...current,
+                                  column: event.target.value,
+                                  label: current.label || event.target.value,
+                                }))
+                              }
+                            >
+                              <option value="">Select column</option>
+                              {classicStickerAvailableColumns.map((column) => (
+                                <option key={`classic-field-column-${fieldIndex}-${column}`} value={column}>
+                                  {column}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Display Label
+                            <input
+                              type="text"
+                              value={field.label}
+                              onChange={(event) =>
+                                setClassicStickerField(fieldIndex, (current) => ({
+                                  ...current,
+                                  label: event.target.value,
+                                }))
+                              }
+                              placeholder={field.column || 'Uses column name'}
+                            />
+                          </label>
+                          <div className="classic-sticker-row-actions">
+                            <button
+                              type="button"
+                              onClick={() => moveClassicStickerField(fieldIndex, -1)}
+                              disabled={fieldIndex === 0}
+                            >
+                              Move Up
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => moveClassicStickerField(fieldIndex, 1)}
+                              disabled={fieldIndex === classicStickerFields.length - 1}
+                            >
+                              Move Down
+                            </button>
+                            <button
+                              type="button"
+                              className="danger"
+                              onClick={() =>
+                                setClassicStickerFields((current) =>
+                                  current.filter((_, index) => index !== fieldIndex)
+                                )
+                              }
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   ) : (
-                    <p className="hint">Select a sheet to preview available columns for sticker setup.</p>
+                    <p className="hint">Select a sheet to auto-populate sticker fields.</p>
                   )}
                 </div>
+
+                <button
+                  type="button"
+                  onClick={generateClassicStickersPdf}
+                  disabled={!selectedFile || classicStickersLoading}
+                >
+                  {classicStickersLoading
+                    ? 'Generating Classic Stickers PDF…'
+                    : 'Generate Classic Stickers PDF'}
+                </button>
+                {classicStickersError ? <p className="error">{classicStickersError}</p> : null}
               </>
             ) : (
               <p className="hint">Run upload first to load sheets for classic sticker generation.</p>
