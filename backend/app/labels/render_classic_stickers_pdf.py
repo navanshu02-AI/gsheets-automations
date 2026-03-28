@@ -17,51 +17,83 @@ CLASSIC_STICKER_PAGE_SIZES = {
 }
 
 
+def resolve_classic_sticker_page_size(label_size: str) -> tuple[float, float]:
+    normalized_size = str(label_size or "").strip().lower()
+    if normalized_size not in CLASSIC_STICKER_PAGE_SIZES:
+        supported_sizes = ", ".join(CLASSIC_STICKER_PAGE_SIZES)
+        raise ValueError(
+            f"Invalid label size '{label_size}'. Choose one of: {supported_sizes}."
+        )
+    return CLASSIC_STICKER_PAGE_SIZES[normalized_size]
+
+
+def validate_classic_sticker_padding(label_size: str, padding_in: float) -> float:
+    try:
+        numeric_padding = float(padding_in)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Padding must be a number in inches.") from exc
+
+    if numeric_padding < 0:
+        raise ValueError("Padding must be 0 or greater.")
+
+    page_width, page_height = resolve_classic_sticker_page_size(label_size)
+    padding_points = numeric_padding * POINTS_PER_INCH
+    if (padding_points * 2) >= page_width or (padding_points * 2) >= page_height:
+        raise ValueError(
+            f"Padding {numeric_padding:g}in is too large for {label_size} labels. "
+            "Reduce the padding and try again."
+        )
+    return numeric_padding
+
+
 def parse_classic_sticker_config(config_text: str | None) -> dict[str, object]:
     if config_text is None or not config_text.strip():
-        raise ValueError("classic_sticker_config is required for classic sticker PDF generation")
+        raise ValueError("Classic sticker settings are missing. Send classic_sticker_config.")
 
     try:
         payload = json.loads(config_text)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON config for classic stickers: {exc.msg}") from exc
+        raise ValueError(f"Classic sticker settings are not valid JSON: {exc.msg}.") from exc
 
     if not isinstance(payload, dict):
-        raise ValueError("Invalid JSON config for classic stickers: expected an object")
+        raise ValueError("Classic sticker settings must be a JSON object.")
 
     sheet_name = str(payload.get("sheet_name") or "").strip()
     if not sheet_name:
-        raise ValueError("classic_sticker_config.sheet_name is required")
+        raise ValueError("Choose a sheet for classic stickers.")
 
     label_size = str(payload.get("label_size") or "").strip().lower()
     if not label_size:
-        raise ValueError("classic_sticker_config.label_size is required")
+        raise ValueError("Choose a label size for classic stickers.")
     resolve_classic_sticker_page_size(label_size)
 
     raw_padding = payload.get("padding_in")
     if raw_padding is None:
-        raise ValueError("classic_sticker_config.padding_in is required")
-    try:
-        padding_in = float(raw_padding)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("classic_sticker_config.padding_in must be a number") from exc
-    if padding_in < 0:
-        raise ValueError("classic_sticker_config.padding_in must be greater than or equal to 0")
+        raise ValueError("Enter padding for classic stickers.")
+    padding_in = validate_classic_sticker_padding(label_size, raw_padding)
 
     fields = payload.get("fields")
     if not isinstance(fields, list) or not fields:
-        raise ValueError("No fields selected for classic stickers")
+        raise ValueError("Select at least one field for classic stickers.")
 
     normalized_fields: list[dict[str, str]] = []
-    for field in fields:
+    for index, field in enumerate(fields):
         if not isinstance(field, dict):
-            raise ValueError("Each classic sticker field must be an object")
+            raise ValueError(f"Field {index + 1} must be an object with column and label.")
         column = str(field.get("column") or "").strip()
         label = str(field.get("label") or "").strip()
         if not column:
-            raise ValueError("Each classic sticker field must include a column")
+            raise ValueError(f"Field {index + 1} is missing a column.")
         if not label:
-            raise ValueError("Each classic sticker field must include a label")
+            label = column
+
+        if normalized_fields:
+            previous = normalized_fields[-1]
+            if previous["column"] == column and previous["label"] == label:
+                raise ValueError(
+                    f"Field {index + 1} repeats '{column}' with the same label immediately after itself. "
+                    "Remove the accidental duplicate or change the label if you want both lines."
+                )
         normalized_fields.append({"column": column, "label": label})
 
     return {
@@ -70,17 +102,6 @@ def parse_classic_sticker_config(config_text: str | None) -> dict[str, object]:
         "padding_in": padding_in,
         "fields": normalized_fields,
     }
-
-
-def resolve_classic_sticker_page_size(label_size: str) -> tuple[float, float]:
-    normalized_size = str(label_size or "").strip().lower()
-    if normalized_size not in CLASSIC_STICKER_PAGE_SIZES:
-        supported_sizes = ", ".join(CLASSIC_STICKER_PAGE_SIZES)
-        raise ValueError(
-            f"Unsupported classic sticker label size '{label_size}'. "
-            f"Supported sizes: {supported_sizes}"
-        )
-    return CLASSIC_STICKER_PAGE_SIZES[normalized_size]
 
 
 def normalize_classic_sticker_value(value: object) -> str:
@@ -220,10 +241,14 @@ def extract_classic_sticker_rows(
     return sticker_rows
 
 
-def suggest_classic_sticker_filename(label_size: str) -> str:
-    normalized_size = str(label_size or "").strip().lower() or "stickers"
-    safe_size = re.sub(r"[^a-z0-9]+", "-", normalized_size).strip("-")
-    return f"classic-stickers-{safe_size or 'labels'}.pdf"
+def suggest_classic_sticker_filename(filename_hint: str, label_size: str) -> str:
+    normalized_size = str(label_size or "").strip().lower() or "labels"
+    safe_size = re.sub(r"[^a-z0-9]+", "-", normalized_size).strip("-") or "labels"
+    base_name = re.sub(r"\.[^.]+$", "", str(filename_hint or "").strip())
+    safe_base = re.sub(r"[^A-Za-z0-9_.-]+", "-", base_name).strip("-.")
+    if safe_base:
+        return f"{safe_base}-classic-stickers-{safe_size}.pdf"
+    return f"classic-stickers-{safe_size}.pdf"
 
 
 def generate_classic_stickers_pdf(
@@ -234,14 +259,12 @@ def generate_classic_stickers_pdf(
     from reportlab.pdfgen import canvas
 
     if padding_in < 0:
-        raise ValueError("padding_in must be greater than or equal to 0 inches")
+        raise ValueError("Padding must be 0 or greater.")
     if not sticker_rows:
-        raise ValueError("No classic sticker rows provided for PDF generation")
+        raise ValueError("No printable rows found for classic stickers.")
 
     page_width, page_height = resolve_classic_sticker_page_size(label_size)
-    padding = padding_in * POINTS_PER_INCH
-    if (padding * 2) >= page_width or (padding * 2) >= page_height:
-        raise ValueError(f"Padding is too large for {label_size} page size")
+    padding = validate_classic_sticker_padding(label_size, padding_in) * POINTS_PER_INCH
 
     safe_x = padding
     safe_y = padding

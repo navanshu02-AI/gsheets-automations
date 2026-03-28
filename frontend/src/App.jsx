@@ -80,6 +80,7 @@ export function App() {
     concat_operations: [],
     vlookup_operations: [],
   })
+  const [classicStickerSheet, setClassicStickerSheet] = useState('')
   const [deliverySheet, setDeliverySheet] = useState('')
   const [deliveryFieldMapping, setDeliveryFieldMapping] = useState({
     ean_code: '',
@@ -108,12 +109,25 @@ export function App() {
   )
   const hasUploadResults = useMemo(() => sheetNames.length > 0, [sheetNames])
   const activeSheetResult = activeSheet ? sheetResults[activeSheet] : undefined
+  const classicStickerSheetResult = classicStickerSheet ? sheetResults[classicStickerSheet] : undefined
   const deliverySheetResult = deliverySheet ? sheetResults[deliverySheet] : undefined
   const deliveryAvailableColumns = deliverySheetResult?.columns ?? []
+  const classicStickerAvailableColumns = classicStickerSheetResult?.columns ?? []
   const hasCompleteFieldMapping = useMemo(
     () => DELIVERY_PRINT_FIELDS.every((field) => Boolean(deliveryFieldMapping[field.key])),
     [deliveryFieldMapping]
   )
+
+  useEffect(() => {
+    if (sheetNames.length === 0) {
+      setClassicStickerSheet('')
+      setDeliverySheet('')
+      return
+    }
+    if (!classicStickerSheet || !sheetNames.includes(classicStickerSheet)) {
+      setClassicStickerSheet(sheetNames[0])
+    }
+  }, [sheetNames, classicStickerSheet])
 
   useEffect(() => {
     if (sheetNames.length === 0) {
@@ -660,6 +674,13 @@ export function App() {
             onClick={() => setFeatureTab('delivery')}
           >
             Delivery Sheet Print (4x6)
+          </button>
+          <button
+            type="button"
+            className={`transform-tab ${featureTab === 'classic_stickers' ? 'active' : ''}`}
+            onClick={() => setFeatureTab('classic_stickers')}
+          >
+            Classic Themes Stickers
           </button>
         </div>
 
@@ -1246,7 +1267,7 @@ export function App() {
               </section>
             ) : null}
           </>
-        ) : (
+        ) : featureTab === 'delivery' ? (
           <section className="builder-section">
             <h3>Delivery Sheet Print</h3>
             <p className="hint">
@@ -1438,6 +1459,50 @@ export function App() {
               </>
             ) : (
               <p className="hint">Run upload first to load order sheets and rows for printing.</p>
+            )}
+          </section>
+        ) : (
+          <section className="builder-section">
+            <h3>Classic Themes Stickers</h3>
+            <p className="hint">
+              Generate classic field-value sticker PDFs from any uploaded sheet.
+            </p>
+
+            {hasUploadResults ? (
+              <>
+                <div className="op-grid">
+                  <label>
+                    Source Sheet
+                    <select
+                      value={classicStickerSheet}
+                      onChange={(event) => setClassicStickerSheet(event.target.value)}
+                    >
+                      <option value="">Select sheet</option>
+                      {sheetNames.map((sheetName) => (
+                        <option key={`classic-sheet-${sheetName}`} value={sheetName}>
+                          {sheetName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="op-card classic-stickers-placeholder">
+                  <h4>Coming Next</h4>
+                  <p className="hint">
+                    Field mapping, label size, and PDF controls will appear here for the selected sheet.
+                  </p>
+                  {classicStickerAvailableColumns.length > 0 ? (
+                    <p className="hint">
+                      Available columns: {classicStickerAvailableColumns.join(', ')}
+                    </p>
+                  ) : (
+                    <p className="hint">Select a sheet to preview available columns for sticker setup.</p>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="hint">Run upload first to load sheets for classic sticker generation.</p>
             )}
           </section>
         )}

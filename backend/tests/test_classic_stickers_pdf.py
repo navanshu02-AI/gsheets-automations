@@ -10,6 +10,7 @@ from app.labels import (
     parse_classic_sticker_config,
     resolve_classic_sticker_page_size,
     suggest_classic_sticker_filename,
+    validate_classic_sticker_padding,
 )
 
 
@@ -52,12 +53,31 @@ class ClassicStickersPdfTests(unittest.TestCase):
             ],
         )
 
+    def test_parse_classic_sticker_config_defaults_blank_label_to_column(self):
+        config = parse_classic_sticker_config(
+            """
+            {
+              "sheet_name": "Sheet1",
+              "label_size": "4x2",
+              "padding_in": 0.1,
+              "fields": [
+                {"column": "Employee Code", "label": ""}
+              ]
+            }
+            """
+        )
+
+        self.assertEqual(
+            config["fields"],
+            [{"column": "Employee Code", "label": "Employee Code"}],
+        )
+
     def test_parse_classic_sticker_config_rejects_invalid_json(self):
-        with self.assertRaisesRegex(ValueError, "Invalid JSON config for classic stickers"):
+        with self.assertRaisesRegex(ValueError, "not valid JSON"):
             parse_classic_sticker_config("{")
 
     def test_parse_classic_sticker_config_rejects_empty_fields(self):
-        with self.assertRaisesRegex(ValueError, "No fields selected for classic stickers"):
+        with self.assertRaisesRegex(ValueError, "Select at least one field"):
             parse_classic_sticker_config(
                 """
                 {
@@ -70,7 +90,7 @@ class ClassicStickersPdfTests(unittest.TestCase):
             )
 
     def test_parse_classic_sticker_config_rejects_invalid_label_size(self):
-        with self.assertRaisesRegex(ValueError, "Unsupported classic sticker label size"):
+        with self.assertRaisesRegex(ValueError, "Invalid label size"):
             parse_classic_sticker_config(
                 """
                 {
@@ -81,6 +101,57 @@ class ClassicStickersPdfTests(unittest.TestCase):
                 }
                 """
             )
+
+    def test_parse_classic_sticker_config_rejects_missing_column(self):
+        with self.assertRaisesRegex(ValueError, "missing a column"):
+            parse_classic_sticker_config(
+                """
+                {
+                  "sheet_name": "Sheet1",
+                  "label_size": "4x2",
+                  "padding_in": 0.1,
+                  "fields": [{"column": "", "label": "NAME"}]
+                }
+                """
+            )
+
+    def test_parse_classic_sticker_config_rejects_immediate_duplicate_field(self):
+        with self.assertRaisesRegex(ValueError, "accidental duplicate"):
+            parse_classic_sticker_config(
+                """
+                {
+                  "sheet_name": "Sheet1",
+                  "label_size": "4x2",
+                  "padding_in": 0.1,
+                  "fields": [
+                    {"column": "NAME", "label": "NAME"},
+                    {"column": "NAME", "label": "NAME"}
+                  ]
+                }
+                """
+            )
+
+    def test_parse_classic_sticker_config_allows_non_adjacent_duplicate_field(self):
+        config = parse_classic_sticker_config(
+            """
+            {
+              "sheet_name": "Sheet1",
+              "label_size": "4x2",
+              "padding_in": 0.1,
+              "fields": [
+                {"column": "NAME", "label": "NAME"},
+                {"column": "SIZE", "label": "SIZE"},
+                {"column": "NAME", "label": "Repeat Name"}
+              ]
+            }
+            """
+        )
+
+        self.assertEqual(len(config["fields"]), 3)
+
+    def test_validate_classic_sticker_padding_rejects_too_large_padding(self):
+        with self.assertRaisesRegex(ValueError, "too large"):
+            validate_classic_sticker_padding("2x2", 1.1)
 
     def test_normalize_classic_sticker_value_formats_scalars(self):
         self.assertEqual(normalize_classic_sticker_value(174826.0), "174826")
@@ -156,7 +227,13 @@ class ClassicStickersPdfTests(unittest.TestCase):
 
     def test_suggest_classic_sticker_filename(self):
         self.assertEqual(
-            suggest_classic_sticker_filename("4x6"),
+            suggest_classic_sticker_filename("orders march.xlsx", "4x6"),
+            "orders-march-classic-stickers-4x6.pdf",
+        )
+
+    def test_suggest_classic_sticker_filename_without_base_name(self):
+        self.assertEqual(
+            suggest_classic_sticker_filename("", "4x6"),
             "classic-stickers-4x6.pdf",
         )
 

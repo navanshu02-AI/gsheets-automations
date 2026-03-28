@@ -1,5 +1,6 @@
 from .render_classic_stickers_pdf import (
     extract_classic_sticker_rows,
+    validate_classic_sticker_padding,
     generate_classic_stickers_pdf,
     normalize_classic_sticker_value,
     parse_classic_sticker_config,
@@ -26,4 +27,5 @@ __all__ = [
     "suggest_classic_sticker_filename",
     "suggest_download_filename",
     "truncate_classic_sticker_text_to_width",
+    "validate_classic_sticker_padding",
 ]

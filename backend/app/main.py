@@ -112,6 +112,7 @@ def _parse_transform_config(config: str | None) -> TransformConfig | None:
 def _build_classic_sticker_response(
     automated_sheets: dict[str, object],
     classic_config: dict[str, object],
+    filename_hint: str,
 ) -> Response:
     sheet_name = str(classic_config["sheet_name"]).strip()
     label_size = str(classic_config["label_size"]).strip().lower()
@@ -119,18 +120,22 @@ def _build_classic_sticker_response(
     fields = list(classic_config["fields"])
 
     if sheet_name not in automated_sheets:
-        raise ValueError(f"Sheet '{sheet_name}' was not found in uploaded file")
+        raise ValueError(
+            f"Sheet '{sheet_name}' was not found in the uploaded file. Choose an existing sheet and try again."
+        )
 
     sticker_rows = extract_classic_sticker_rows(automated_sheets[sheet_name], fields)
     if not sticker_rows:
-        raise ValueError("No printable rows found for classic stickers")
+        raise ValueError(
+            "No printable rows were found for classic stickers. Check the selected fields and make sure the chosen sheet has values."
+        )
 
     pdf_bytes = generate_classic_stickers_pdf(
         sticker_rows,
         label_size=label_size,
         padding_in=padding_in,
     )
-    filename = suggest_classic_sticker_filename(label_size)
+    filename = suggest_classic_sticker_filename(filename_hint, label_size)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -212,7 +217,11 @@ async def automate_upload(
                 )
 
             if requested_mode == "classic_stickers_pdf":
-                return _build_classic_sticker_response(automated_sheets, classic_config or {})
+                return _build_classic_sticker_response(
+                    automated_sheets,
+                    classic_config or {},
+                    filename_hint=filename,
+                )
 
             result_sheets: list[str] = []
             output_sheets = automated_sheets
@@ -252,7 +261,11 @@ async def automate_upload(
                 )
 
             if requested_mode == "classic_stickers_pdf":
-                return _build_classic_sticker_response(automated_sheets, classic_config or {})
+                return _build_classic_sticker_response(
+                    automated_sheets,
+                    classic_config or {},
+                    filename_hint=filename,
+                )
 
             result_sheets = []
             output_sheets = automated_sheets
