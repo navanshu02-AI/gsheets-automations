@@ -68,6 +68,11 @@ const DELIVERY_PRINT_FIELDS = [
 
 const pickFirstMatchingColumn = (columns, candidates) =>
   candidates.find((candidate) => columns.includes(candidate)) ?? ''
+const CLASSIC_STICKER_PREVIEW_LINES = [
+  'Employee Code : 174826',
+  'NAME : Abdul Khader',
+  'SIZE : XL - 42',
+]
 
 export function App() {
   const [selectedFile, setSelectedFile] = useState(null)
@@ -125,6 +130,20 @@ export function App() {
   const deliverySheetResult = deliverySheet ? sheetResults[deliverySheet] : undefined
   const deliveryAvailableColumns = deliverySheetResult?.columns ?? []
   const classicStickerAvailableColumns = classicStickerSheetResult?.columns ?? []
+  const classicStickerConfiguredFields = useMemo(
+    () => classicStickerFields.filter((field) => field.column.trim()),
+    [classicStickerFields]
+  )
+  const classicStickerPaddingValue = Number.parseFloat(classicStickerPaddingIn)
+  const classicStickerHasValidPadding =
+    !Number.isNaN(classicStickerPaddingValue) && classicStickerPaddingValue >= 0
+  const classicStickerCanGenerate = Boolean(
+    selectedFile &&
+      hasUploadResults &&
+      classicStickerSheet &&
+      classicStickerConfiguredFields.length > 0 &&
+      classicStickerHasValidPadding
+  )
   const hasCompleteFieldMapping = useMemo(
     () => DELIVERY_PRINT_FIELDS.every((field) => Boolean(deliveryFieldMapping[field.key])),
     [deliveryFieldMapping]
@@ -666,6 +685,13 @@ export function App() {
       padding_in: padding,
       fields,
     }
+  }
+
+  const getClassicStickerFieldError = (field) => {
+    if (!field.column.trim()) {
+      return 'Choose a source column.'
+    }
+    return ''
   }
 
   const generateClassicStickersPdf = async () => {
@@ -1603,6 +1629,12 @@ export function App() {
             <p className="hint">
               Generate classic field-value sticker PDFs from any uploaded sheet.
             </p>
+            <div className="op-card classic-stickers-placeholder">
+              <h4>Sticker Style</h4>
+              <p className="hint">Each sticker prints as a vertical stack of `LABEL : VALUE` lines.</p>
+              <pre className="classic-sticker-preview">{CLASSIC_STICKER_PREVIEW_LINES.join('\n')}</pre>
+              <p className="hint">There is no fixed number of fields. Choose as many columns as you need.</p>
+            </div>
 
             {hasUploadResults ? (
               <>
@@ -1634,6 +1666,9 @@ export function App() {
                       ))}
                     </select>
                   </label>
+                  {!classicStickerSheet ? (
+                    <p className="error">Choose a source sheet to configure sticker fields.</p>
+                  ) : null}
                   <label>
                     Padding (inches)
                     <input
@@ -1644,6 +1679,9 @@ export function App() {
                       onChange={(event) => setClassicStickerPaddingIn(event.target.value)}
                     />
                   </label>
+                  {!classicStickerHasValidPadding ? (
+                    <p className="error">Padding must be 0 or greater.</p>
+                  ) : null}
                 </div>
 
                 <div className="op-card classic-stickers-placeholder">
@@ -1662,7 +1700,9 @@ export function App() {
                     Choose columns in the order they should print as `LABEL : VALUE` lines.
                   </p>
 
-                  {classicStickerFields.length > 0 ? (
+                  {!classicStickerSheet ? (
+                    <p className="hint">Pick a source sheet first to load available columns.</p>
+                  ) : classicStickerFields.length > 0 ? (
                     <div className="classic-sticker-fields">
                       {classicStickerFields.map((field, fieldIndex) => (
                         <div key={`classic-field-${fieldIndex}`} className="classic-sticker-field-row">
@@ -1727,18 +1767,36 @@ export function App() {
                               Remove
                             </button>
                           </div>
+                          {getClassicStickerFieldError(field) ? (
+                            <p className="error classic-sticker-inline-error">
+                              {getClassicStickerFieldError(field)}
+                            </p>
+                          ) : null}
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <p className="hint">Select a sheet to auto-populate sticker fields.</p>
+                    <p className="hint">
+                      No fields added yet. Use `Add Field` to choose columns for the sticker.
+                    </p>
                   )}
                 </div>
+
+                {classicStickerCanGenerate ? (
+                  <p className="hint">
+                    Will generate one sticker per row from sheet {classicStickerSheet} using{' '}
+                    {classicStickerConfiguredFields.length} fields at size {classicStickerLabelSize}.
+                  </p>
+                ) : (
+                  <p className="hint">
+                    Finish the sheet, field, and padding setup to enable PDF generation.
+                  </p>
+                )}
 
                 <button
                   type="button"
                   onClick={generateClassicStickersPdf}
-                  disabled={!selectedFile || classicStickersLoading}
+                  disabled={!classicStickerCanGenerate || classicStickersLoading}
                 >
                   {classicStickersLoading
                     ? 'Generating Classic Stickers PDF…'
@@ -1747,7 +1805,9 @@ export function App() {
                 {classicStickersError ? <p className="error">{classicStickersError}</p> : null}
               </>
             ) : (
-              <p className="hint">Run upload first to load sheets for classic sticker generation.</p>
+              <p className="hint">
+                Run upload first to load sheets and columns before configuring classic sticker PDFs.
+              </p>
             )}
           </section>
         )}

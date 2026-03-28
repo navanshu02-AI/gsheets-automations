@@ -145,6 +145,16 @@ select {
   max-width: 720px;
 }
 
+.classic-sticker-preview {
+  margin: 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #dbe4f0;
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  white-space: pre-wrap;
+}
+
 .classic-sticker-fields {
   display: flex;
   flex-direction: column;
@@ -162,6 +172,10 @@ select {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+.classic-sticker-inline-error {
+  margin: 0;
 }
 
 @media (max-width: 820px) {
