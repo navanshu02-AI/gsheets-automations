@@ -80,22 +80,24 @@ def parse_classic_sticker_config(config_text: str | None) -> dict[str, object]:
     normalized_fields: list[dict[str, str]] = []
     for index, field in enumerate(fields):
         if not isinstance(field, dict):
-            raise ValueError(f"Field {index + 1} must be an object with column and label.")
+            raise ValueError(
+                f"Field {index + 1} must be an object with optional column, label, and value."
+            )
         column = str(field.get("column") or "").strip()
         label = str(field.get("label") or "").strip()
-        if not column:
-            raise ValueError(f"Field {index + 1} is missing a column.")
+        raw_value = field.get("value", field.get("custom_value", ""))
+        value = normalize_classic_sticker_value(raw_value)
         if not label:
-            label = column
+            label = column or f"Field {index + 1}"
 
-        if normalized_fields:
+        if normalized_fields and column:
             previous = normalized_fields[-1]
-            if previous["column"] == column and previous["label"] == label:
+            if previous.get("column", "") == column and previous.get("label", "") == label:
                 raise ValueError(
                     f"Field {index + 1} repeats '{column}' with the same label immediately after itself. "
                     "Remove the accidental duplicate or change the label if you want both lines."
                 )
-        normalized_fields.append({"column": column, "label": label})
+        normalized_fields.append({"column": column, "label": label, "value": value})
 
     return {
         "sheet_name": sheet_name,
@@ -209,10 +211,10 @@ def _prepare_classic_sticker_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, d
     return prepared, aliases
 
 
-def _coerce_classic_sticker_field(field: object) -> tuple[str, str] | None:
+def _coerce_classic_sticker_field(field: object) -> dict[str, str] | None:
     if isinstance(field, str):
         key = field.strip()
-        return (key, key) if key else None
+        return {"column": key, "label": key, "value": ""} if key else None
 
     if not isinstance(field, dict):
         return None
@@ -228,12 +230,18 @@ def _coerce_classic_sticker_field(field: object) -> tuple[str, str] | None:
         or field.get("id")
     )
     key = str(raw_key or "").strip()
-    if not key:
-        return None
-
     raw_label = field.get("label") or field.get("display_label") or key
     label = str(raw_label).strip() or key
-    return key, label
+    raw_value = field.get("value", field.get("custom_value", ""))
+    value = normalize_classic_sticker_value(raw_value)
+
+    if not key and not label:
+        return None
+
+    if not label:
+        label = key
+
+    return {"column": key, "label": label, "value": value}
 
 
 def extract_classic_sticker_rows(
@@ -243,7 +251,7 @@ def extract_classic_sticker_rows(
         return []
 
     prepared_frame, prepared_aliases = _prepare_classic_sticker_frame(frame)
-    resolved_fields: list[tuple[str, str]] = []
+    resolved_fields: list[dict[str, str]] = []
     column_lookup = {str(column): str(column) for column in prepared_frame.columns}
     normalized_lookup = {
         _normalize_header(column): str(column)
@@ -257,14 +265,29 @@ def extract_classic_sticker_rows(
         if coerced is None:
             continue
 
-        requested_key, label = coerced
-        actual_column = column_lookup.get(requested_key)
-        if actual_column is None:
-            actual_column = normalized_lookup.get(_normalize_header(requested_key))
-        if actual_column is None:
+        requested_key = coerced.get("column", "").strip()
+        label = coerced.get("label", "").strip()
+        static_value = coerced.get("value", "")
+
+        if requested_key:
+            actual_column = column_lookup.get(requested_key)
+            if actual_column is None:
+                actual_column = normalized_lookup.get(_normalize_header(requested_key))
+            if actual_column is None:
+                continue
+
+            resolved_fields.append(
+                {
+                    "kind": "column",
+                    "column": actual_column,
+                    "label": label,
+                    "value": static_value,
+                }
+            )
             continue
 
-        resolved_fields.append((actual_column, label))
+        if label:
+            resolved_fields.append({"kind": "static", "label": label, "value": static_value})
 
     if not resolved_fields:
         raise ValueError(
@@ -275,10 +298,18 @@ def extract_classic_sticker_rows(
     sticker_rows: list[dict[str, list[dict[str, str]]]] = []
     for _, record in prepared_frame.iterrows():
         lines: list[dict[str, str]] = []
-        for actual_column, label in resolved_fields:
-            value = normalize_classic_sticker_value(record.get(actual_column, ""))
-            if not value:
+        for field in resolved_fields:
+            label = field["label"]
+            if field.get("kind") == "column":
+                value = normalize_classic_sticker_value(record.get(field["column"], ""))
+                if not value:
+                    value = field.get("value", "")
+                if not value:
+                    continue
+                lines.append({"label": label, "value": value})
                 continue
+
+            value = field.get("value", "") or "____"
             lines.append({"label": label, "value": value})
 
         if lines:

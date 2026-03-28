@@ -142,35 +142,80 @@ select {
 }
 
 .classic-stickers-placeholder {
-  max-width: 720px;
+  max-width: 100%;
 }
 
 .classic-sticker-fields {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.85rem;
 }
 
-.classic-sticker-field-row {
+.classic-columns-list {
+  line-height: 1.4;
+}
+
+.classic-sticker-field-card {
+  border: 1px solid #d7e3f4;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.classic-sticker-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.classic-field-title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+.classic-sticker-field-inputs {
   display: grid;
   gap: 0.6rem;
-  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
-  align-items: end;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.classic-sticker-field-inputs label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
 }
 
 .classic-sticker-row-actions {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.45rem;
   flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.classic-action-btn {
+  padding: 0.55rem 0.85rem;
+  font-size: 0.86rem;
 }
 
 .classic-sticker-inline-error {
   margin: 0;
+  font-size: 0.86rem;
 }
 
 @media (max-width: 820px) {
-  .classic-sticker-field-row {
-    grid-template-columns: 1fr;
+  .classic-sticker-field-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .classic-sticker-row-actions {
+    justify-content: flex-start;
   }
 }
 

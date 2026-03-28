@@ -26,7 +26,7 @@ const createVlookupOperation = () => ({
   return_columns: '',
   output_prefix: '',
 })
-const createClassicStickerField = (column = '', label = '') => ({ column, label })
+const createClassicStickerField = (column = '', label = '', value = '') => ({ column, label, value })
 const CLASSIC_STICKER_SIZE_OPTIONS = [
   { value: '2x2', label: '2 x 2 inches' },
   { value: '4x2', label: '4 x 2 inches' },
@@ -158,12 +158,27 @@ export function App() {
     }))
   }, [classicStickerSheetResult])
   const classicStickerAvailableColumns = classicStickerColumnOptions.map((option) => option.value)
-  const classicStickerConfiguredFields = useMemo(
-    () => classicStickerFields.filter((field) => field.column.trim()),
+  const classicStickerPreparedFields = useMemo(
+    () =>
+      classicStickerFields
+        .map((field, index) => {
+          const column = field.column.trim()
+          const label = field.label.trim()
+          const value = field.value.trim()
+          if (!column && !label && !value) {
+            return null
+          }
+          return {
+            column,
+            label: label || column || `Field ${index + 1}`,
+            value,
+          }
+        })
+        .filter(Boolean),
     [classicStickerFields]
   )
-  const classicStickerHasIncompleteFields = useMemo(
-    () => classicStickerFields.some((field) => !field.column.trim()),
+  const classicStickerHasInvalidCustomFields = useMemo(
+    () => classicStickerFields.some((field) => !field.column.trim() && !field.label.trim()),
     [classicStickerFields]
   )
   const classicStickerPaddingValue = Number.parseFloat(classicStickerPaddingIn)
@@ -173,9 +188,9 @@ export function App() {
     selectedFile &&
       hasUploadResults &&
       classicStickerSheet &&
-      classicStickerConfiguredFields.length > 0 &&
+      classicStickerPreparedFields.length > 0 &&
       classicStickerHasValidPadding &&
-      !classicStickerHasIncompleteFields
+      !classicStickerHasInvalidCustomFields
   )
   const hasCompleteFieldMapping = useMemo(
     () => DELIVERY_PRINT_FIELDS.every((field) => Boolean(deliveryFieldMapping[field.key])),
@@ -208,7 +223,7 @@ export function App() {
         return validCurrent
       }
 
-      return classicStickerAvailableColumns.map((column) => createClassicStickerField(column, column))
+      return classicStickerAvailableColumns.map((column) => createClassicStickerField(column, column, ''))
     })
   }, [classicStickerAvailableColumns])
 
@@ -698,16 +713,15 @@ export function App() {
     if (Number.isNaN(padding) || padding < 0) {
       throw new Error('Padding must be 0 or greater.')
     }
-    if (classicStickerHasIncompleteFields) {
-      throw new Error('Map or remove every added field before generating the PDF.')
+    if (classicStickerHasInvalidCustomFields) {
+      throw new Error('Custom fields without source column must include a display label.')
     }
 
-    const fields = classicStickerFields
-      .map((field) => ({
-        column: field.column.trim(),
-        label: (field.label || field.column).trim() || field.column.trim(),
-      }))
-      .filter((field) => field.column)
+    const fields = classicStickerPreparedFields.map((field) => ({
+      column: field.column,
+      label: field.label,
+      value: field.value,
+    }))
 
     if (fields.length === 0) {
       throw new Error('Add at least one sticker field before generating the PDF.')
@@ -722,8 +736,8 @@ export function App() {
   }
 
   const getClassicStickerFieldError = (field) => {
-    if (!field.column.trim()) {
-      return 'Choose a source column.'
+    if (!field.column.trim() && !field.label.trim()) {
+      return 'Enter a display label for custom fields.'
     }
     return ''
   }
@@ -1681,6 +1695,9 @@ export function App() {
                         </option>
                       ))}
                     </select>
+                    {!classicStickerSheet ? (
+                      <span className="hint classic-inline-hint">Required.</span>
+                    ) : null}
                   </label>
                   <label>
                     Label Size
@@ -1695,9 +1712,6 @@ export function App() {
                       ))}
                     </select>
                   </label>
-                  {!classicStickerSheet ? (
-                    <p className="error">Choose a source sheet to configure sticker fields.</p>
-                  ) : null}
                   <label>
                     Padding (inches)
                     <input
@@ -1707,11 +1721,14 @@ export function App() {
                       value={classicStickerPaddingIn}
                       onChange={(event) => setClassicStickerPaddingIn(event.target.value)}
                     />
+                    {!classicStickerHasValidPadding ? (
+                      <span className="error classic-inline-hint">Must be 0 or greater.</span>
+                    ) : null}
                   </label>
-                  {!classicStickerHasValidPadding ? (
-                    <p className="error">Padding must be 0 or greater.</p>
-                  ) : null}
                 </div>
+                {!classicStickerSheet ? (
+                  <p className="error">Choose a source sheet to configure sticker fields.</p>
+                ) : null}
 
                 <div className="op-card classic-stickers-placeholder">
                   <div className="builder-header">
@@ -1726,11 +1743,11 @@ export function App() {
                     </button>
                   </div>
                   <p className="hint">
-                    Choose columns in the order they should print as `LABEL : VALUE` lines.
+                    Choose source columns, or add custom lines with label/value only.
                   </p>
                   {classicStickerAvailableColumns.length > 0 ? (
-                    <p className="hint">
-                      Available columns: {classicStickerAvailableColumns.join(', ')}
+                    <p className="hint classic-columns-list">
+                      <strong>Available columns:</strong> {classicStickerAvailableColumns.join(', ')}
                     </p>
                   ) : null}
 
@@ -1739,70 +1756,93 @@ export function App() {
                   ) : classicStickerFields.length > 0 ? (
                     <div className="classic-sticker-fields">
                       {classicStickerFields.map((field, fieldIndex) => (
-                        <div key={`classic-field-${fieldIndex}`} className="classic-sticker-field-row">
-                          <label>
-                            Source Column
-                            <select
-                              value={field.column}
-                              onChange={(event) =>
-                                setClassicStickerField(fieldIndex, (current) => ({
-                                  ...current,
-                                  column: event.target.value,
-                                  label: current.label || event.target.value,
-                                }))
-                              }
-                            >
-                              <option value="">Select column</option>
-                              {classicStickerColumnOptions.map((option) => (
-                                <option
-                                  key={`classic-field-column-${fieldIndex}-${option.value}`}
-                                  value={option.value}
-                                >
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label>
-                            Display Label
-                            <input
-                              type="text"
-                              value={field.label}
-                              onChange={(event) =>
-                                setClassicStickerField(fieldIndex, (current) => ({
-                                  ...current,
-                                  label: event.target.value,
-                                }))
-                              }
-                              placeholder={field.column || 'Uses column name'}
-                            />
-                          </label>
-                          <div className="classic-sticker-row-actions">
-                            <button
-                              type="button"
-                              onClick={() => moveClassicStickerField(fieldIndex, -1)}
-                              disabled={fieldIndex === 0}
-                            >
-                              Move Up
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => moveClassicStickerField(fieldIndex, 1)}
-                              disabled={fieldIndex === classicStickerFields.length - 1}
-                            >
-                              Move Down
-                            </button>
-                            <button
-                              type="button"
-                              className="danger"
-                              onClick={() =>
-                                setClassicStickerFields((current) =>
-                                  current.filter((_, index) => index !== fieldIndex)
-                                )
-                              }
-                            >
-                              Remove
-                            </button>
+                        <div key={`classic-field-${fieldIndex}`} className="classic-sticker-field-card">
+                          <div className="classic-sticker-field-head">
+                            <p className="classic-field-title">Field {fieldIndex + 1}</p>
+                            <div className="classic-sticker-row-actions">
+                              <button
+                                type="button"
+                                className="classic-action-btn"
+                                onClick={() => moveClassicStickerField(fieldIndex, -1)}
+                                disabled={fieldIndex === 0}
+                              >
+                                Move Up
+                              </button>
+                              <button
+                                type="button"
+                                className="classic-action-btn"
+                                onClick={() => moveClassicStickerField(fieldIndex, 1)}
+                                disabled={fieldIndex === classicStickerFields.length - 1}
+                              >
+                                Move Down
+                              </button>
+                              <button
+                                type="button"
+                                className="danger classic-action-btn"
+                                onClick={() =>
+                                  setClassicStickerFields((current) =>
+                                    current.filter((_, index) => index !== fieldIndex)
+                                  )
+                                }
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                          <div className="classic-sticker-field-inputs">
+                            <label>
+                              Source Column (optional)
+                              <select
+                                value={field.column}
+                                onChange={(event) =>
+                                  setClassicStickerField(fieldIndex, (current) => ({
+                                    ...current,
+                                    column: event.target.value,
+                                    label: current.label || event.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="">Custom field (no source)</option>
+                                {classicStickerColumnOptions.map((option) => (
+                                  <option
+                                    key={`classic-field-column-${fieldIndex}-${option.value}`}
+                                    value={option.value}
+                                  >
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              Display Label
+                              <input
+                                type="text"
+                                value={field.label}
+                                onChange={(event) =>
+                                  setClassicStickerField(fieldIndex, (current) => ({
+                                    ...current,
+                                    label: event.target.value,
+                                  }))
+                                }
+                                placeholder={field.column || 'Required for custom field'}
+                              />
+                            </label>
+                            <label>
+                              Custom Value (optional)
+                              <input
+                                type="text"
+                                value={field.value}
+                                onChange={(event) =>
+                                  setClassicStickerField(fieldIndex, (current) => ({
+                                    ...current,
+                                    value: event.target.value,
+                                  }))
+                                }
+                                placeholder={
+                                  field.column ? 'Used if source value is blank' : 'Leave blank for ____'
+                                }
+                              />
+                            </label>
                           </div>
                           {getClassicStickerFieldError(field) ? (
                             <p className="error classic-sticker-inline-error">
@@ -1822,11 +1862,11 @@ export function App() {
                 {classicStickerCanGenerate ? (
                   <p className="hint">
                     Will generate one sticker per row from sheet {classicStickerSheet} using{' '}
-                    {classicStickerConfiguredFields.length} fields at size {classicStickerLabelSize}.
+                    {classicStickerPreparedFields.length} fields at size {classicStickerLabelSize}.
                   </p>
-                ) : classicStickerHasIncompleteFields ? (
+                ) : classicStickerHasInvalidCustomFields ? (
                   <p className="hint">
-                    One or more added fields are still unmapped. Choose a source column or remove the row.
+                    One or more custom fields are missing display labels.
                   </p>
                 ) : (
                   <p className="hint">

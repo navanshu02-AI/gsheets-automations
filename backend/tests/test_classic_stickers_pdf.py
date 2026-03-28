@@ -59,8 +59,8 @@ class ClassicStickersPdfTests(unittest.TestCase):
         self.assertEqual(
             config["fields"],
             [
-                {"column": "Employee Code", "label": "Employee Code"},
-                {"column": "NAME", "label": "NAME"},
+                {"column": "Employee Code", "label": "Employee Code", "value": ""},
+                {"column": "NAME", "label": "NAME", "value": ""},
             ],
         )
 
@@ -94,7 +94,7 @@ class ClassicStickersPdfTests(unittest.TestCase):
 
         self.assertEqual(
             config["fields"],
-            [{"column": "Employee Code", "label": "Employee Code"}],
+            [{"column": "Employee Code", "label": "Employee Code", "value": ""}],
         )
 
     def test_parse_classic_sticker_config_rejects_invalid_json(self):
@@ -127,18 +127,22 @@ class ClassicStickersPdfTests(unittest.TestCase):
                 """
             )
 
-    def test_parse_classic_sticker_config_rejects_missing_column(self):
-        with self.assertRaisesRegex(ValueError, "missing a column"):
-            parse_classic_sticker_config(
-                """
-                {
-                  "sheet_name": "Sheet1",
-                  "label_size": "4x2",
-                  "padding_in": 0.1,
-                  "fields": [{"column": "", "label": "NAME"}]
-                }
-                """
-            )
+    def test_parse_classic_sticker_config_allows_custom_field_without_column(self):
+        config = parse_classic_sticker_config(
+            """
+            {
+              "sheet_name": "Sheet1",
+              "label_size": "4x2",
+              "padding_in": 0.1,
+              "fields": [{"column": "", "label": "Box No", "value": ""}]
+            }
+            """
+        )
+
+        self.assertEqual(
+            config["fields"],
+            [{"column": "", "label": "Box No", "value": ""}],
+        )
 
     def test_parse_classic_sticker_config_rejects_immediate_duplicate_field(self):
         with self.assertRaisesRegex(ValueError, "accidental duplicate"):
@@ -243,6 +247,25 @@ class ClassicStickersPdfTests(unittest.TestCase):
                 {"label": "Employee Code", "value": "174826"},
                 {"label": "NAME", "value": "Abdul Khader"},
                 {"label": "LOCATION", "value": "Chennai"},
+            ],
+        )
+
+    def test_extract_classic_sticker_rows_includes_custom_static_field(self):
+        frame = pd.DataFrame({"NAME": ["Abdul Khader"]})
+
+        rows = extract_classic_sticker_rows(
+            frame,
+            [
+                {"column": "NAME", "label": "NAME"},
+                {"column": "", "label": "Box No", "value": ""},
+            ],
+        )
+
+        self.assertEqual(
+            rows[0]["lines"],
+            [
+                {"label": "NAME", "value": "Abdul Khader"},
+                {"label": "Box No", "value": "____"},
             ],
         )
 
